@@ -9,6 +9,7 @@ import serial
 import logging
 import time
 import threading
+from serial import Serial
 
 # 配置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -125,7 +126,7 @@ class RobotController:
     def connect(self):
         """连接到机器人控制串口"""
         try:
-            self.serial = serial.Serial(
+            self.serial = Serial(
                 port=self.port,
                 baudrate=self.baudrate,
                 timeout=self.timeout

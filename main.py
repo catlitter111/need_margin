@@ -79,11 +79,11 @@ RKNN_MODEL = "/home/elf/Desktop/project/new_project/yolo11n.rknn"
 MODEL_SIZE = (640, 640)  # 模型输入尺寸
 
 # 舵机控制相关的常量
-DEFAULT_SERVO_PORT = "/dev/ttyS9"  # 默认舵机串口
+DEFAULT_SERVO_PORT = "/dev/ttyS10"  # 默认舵机串口
 DEFAULT_SERVO_BAUDRATE = 115200  # 默认波特率
 
 # 机器人控制串口
-ROBOT_SERIAL_PORT = '/dev/ttyUSB0'  # 机器人控制串口
+ROBOT_SERIAL_PORT = "/dev/ttyS9"  # 机器人控制串口
 ROBOT_SERIAL_BAUDRATE = 115200
 
 # 全局状态变量
