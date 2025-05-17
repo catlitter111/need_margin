@@ -161,14 +161,34 @@ class ServoController:
         """设置所有舵机到初始位置"""
         command = "#000P1250T1500!#001P0900T1500!#002P2000T1500!#003P0800T1500!#004P1500T1500!#005P1200T1500!"
         return self.send_command(command)
-    def receive_catch(self):
+    
+    def receive_catch(self, timeout=0.1):
+        """
+        非阻塞方式接收舵机数据
+        
+        参数:
+        timeout -- 最大等待时间(秒)
+        
+        返回:
+        舵机位置(500-2500)，失败返回None
+        """
         try:
-
+            # 保存原始超时设置
+            original_timeout = self.serial.timeout
+            
+            # 设置较短的超时时间
+            self.serial.timeout = timeout
+            
+            # 尝试读取数据
             data = self.serial.read(256)
+            
+            # 恢复原始超时设置
+            self.serial.timeout = original_timeout
+            
             if data:
                 # 假设数据是字符串格式类似 "#000P1000!\r\n"
                 data_str = data.decode('utf-8').strip()
-                print(f"接收到数据: {data_str}")
+                logger.debug(f"接收到数据: {data_str}")
                 
                 # 提取舵机编号和角度
                 if data_str.startswith("#") and data_str.endswith("!"):
@@ -177,16 +197,15 @@ class ServoController:
                     if len(parts) >= 2:
                         servo_id = parts[0]
                         angle = int(parts[1].split('!')[0])  # 以防有其他字符
-                        # 打印结果
-                        print(f"舵机编号: {servo_id}, 角度: {angle}")
+                        logger.debug(f"舵机编号: {servo_id}, 角度: {angle}")
                         return int(angle)
                 else:
-                    print("数据格式不正确")
-            else:
-                return None
+                    logger.debug("数据格式不正确")
+            return None
         except Exception as e:
-            print(f"接收失败: {e}")
-            return None    
+            logger.error(f"接收失败: {e}")
+            return None
+        
     def track_object(self, frame_width, object_cx, servo_id=DEFAULT_SERVO_ID, current_position=CENTER_POSITION):
         """
         跟踪物体，控制舵机使其保持在画面中心
