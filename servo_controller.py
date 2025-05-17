@@ -50,6 +50,11 @@ class ServoController:
         self.send_right=1
         self.PID_STARTX=0
 
+        self.stop_flag_y=1 
+        self.read_flag_y=1
+        self.send_up=1
+        self.send_down=1
+        self.PID_STARTY=0
 
     
     def connect(self):
@@ -89,7 +94,7 @@ class ServoController:
         
         try:
             self.serial.write(command.encode())
-            logger.debug(f"已发送命令: {command}")
+            logger.info(f"已发送命令: {command}")
             
             if wait_for_response:
                 # 等待舵机响应
@@ -197,7 +202,7 @@ class ServoController:
                     if len(parts) >= 2:
                         servo_id = parts[0]
                         angle = int(parts[1].split('!')[0])  # 以防有其他字符
-                        logger.debug(f"舵机编号: {servo_id}, 角度: {angle}")
+                        logger.info(f"舵机编号: {servo_id}, 角度: {angle}")
                         return int(angle)
                 else:
                     logger.debug("数据格式不正确")
@@ -206,7 +211,7 @@ class ServoController:
             logger.error(f"接收失败: {e}")
             return None
         
-    def track_object(self, frame_width, object_cx, servo_id=DEFAULT_SERVO_ID, current_position=CENTER_POSITION):
+    def track_object(self, frame_width,fram_hight, object_cx, object_cy, current_position=CENTER_POSITION):
         """
         跟踪物体，控制舵机使其保持在画面中心
         
@@ -222,7 +227,7 @@ class ServoController:
         # 计算画面中心与物体中心的水平偏差
         frame_center_x = frame_width // 2+80
         offset_x = frame_center_x - object_cx
-        SPEED = 9
+        SPEED = 7.5
         # 设置死区范围，避免微小偏差引起的频繁调整
         dead_zone = 30  # 较大的死区，减少频繁移动
         
@@ -232,9 +237,10 @@ class ServoController:
         #     return current_position
         # else:
             #print(cx - CENTERX)
+        print(offset_x)
         if abs(object_cx - frame_center_x) <= dead_zone:
             if self.stop_flag_x == 1:
-                command1 = "#{:03d}PDST!".format(servo_id)
+                command1 = "#{:03d}PDST!".format(0)
                 self.send_command(command1)
                 self.stop_flag_x = 0
                 self.read_flag_x = 1
@@ -243,18 +249,17 @@ class ServoController:
         else:
             self.stop_flag_x = 1
             if self.read_flag_x == 1:
-                command1 = "#{:03d}PRAD!".format(servo_id)
+                command1 = "#{:03d}PRAD!".format(0)
                 self.send_command(command1)
-                print(1)
                 self.PID_STARTX=self.receive_catch()
-                print(2)
                 self.read_flag_x=0
             else:
                 #print(PID_STARTX)
+                
                 if frame_center_x - object_cx > dead_zone:
                     
                     if self.PID_STARTX > 2100:
-                        command1 = "#{:03d}PDST!".format(servo_id)
+                        command1 = "#{:03d}PDST!".format(0)
                     else:
                         temp=int((2167-self.PID_STARTX)*SPEED)
                         if temp<4000:
@@ -266,8 +271,8 @@ class ServoController:
                         self.send_right=1
                 elif object_cx - frame_center_x > dead_zone:
                     
-                    if self.PID_STARTX < 900:
-                        command1 = "#{:03d}PDST!".format(servo_id)
+                    if self.PID_STARTX < 833:
+                        command1 = "#{:03d}PDST!".format(0)
                     else:
                         temp=int((self.PID_STARTX-833)*SPEED)
                         if temp<3000:
@@ -277,6 +282,50 @@ class ServoController:
                         self.send_command(command1)
                         self.send_right=0
                         self.send_left=1   
+        frame_center_y = fram_hight // 2
+        offset_y = frame_center_y - object_cy
+        #print(cy - CENTERY)
+        if abs(object_cy - frame_center_y) <= dead_zone:
+            if self.stop_flag_y == 1:
+                command1 = "#{:03d}PDST!".format(1)
+                self.send_command(command1)
+                self.stop_flag_y = 0
+                self.read_flag_y = 1
+                self.send_up=1
+                self.send_down=1
+        else:
+            self.stop_flag_y = 1
+            if self.read_flag_y == 1:
+                command1 = "#{:03d}PRAD!".format(1)
+                self.send_command(command1)
+                self.PID_STARTY=self.receive_catch()
+                self.read_flag_y=0
+            else:
+                if frame_center_y - object_cy > dead_zone:  
+                    if self.PID_STARTY > 1480:
+                        command1 = "#{:03d}PDST!".format(1)
+                    else:
+                        temp=int((1500 - self.PID_STARTY)*SPEED)
+                        if temp<4000:
+                            temp=4000
+                        command1 = "#{:03d}P{:04d}T{:04d}!".format(1, 1500, temp)
+                    if self.send_up==1:
+                        self.send_command(command1)
+                        self.send_up=0
+                        self.send_down=1
+                elif object_cy - frame_center_y > dead_zone:
+                    
+                    if self.PID_STARTY < 882:
+                        command1 = "#{:03d}PDST!".format(1)
+                    else:
+                        temp=int((self.PID_STARTY - 882)*SPEED)
+                        if temp <3000:
+                            temp=3000
+                        command1 = "#{:03d}P{:04d}T{:04d}!".format(1, 882,temp)
+                    if self.send_down==1:
+                        self.send_command(command1)
+                        self.send_down=0
+                        self.send_up=1
         # # 根据偏差计算舵机新位置
         # # 使用非线性映射，大偏差时移动更快，小偏差时移动更缓慢
         # # 偏移系数根据偏差大小动态调整
