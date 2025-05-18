@@ -79,7 +79,7 @@ RKNN_MODEL = "/home/elf/Desktop/project/new_project/yolo11n.rknn"
 MODEL_SIZE = (640, 640)  # 模型输入尺寸
 
 # 舵机控制相关的常量
-DEFAULT_SERVO_PORT = "/dev/ttyS10"  # 默认舵机串口
+DEFAULT_SERVO_PORT = "/dev/ttyS90"  # 默认舵机串口
 DEFAULT_SERVO_BAUDRATE = 115200  # 默认波特率
 
 # 机器人控制串口
@@ -396,8 +396,8 @@ def draw_auto_control_info(image, distance, robot_moving):
 
 # ====================线程函数====================
 def video_processing_thread(stereo_camera, bottle_detector, servo, robot):
-    """视频处理线程：执行瓶子检测、舵机控制和自动控制（修改为显示彩色画面）"""
-    global bottle_detections_with_distance, robot_status, nearest_bottle_distance, running
+    """视频处理线程：执行瓶子检测、舵机控制和自动控制"""
+    global bottle_detections_with_distance, robot_status, nearest_bottle_distance,running
     
     # 初始化变量
     current_servo_position = CENTER_POSITION
@@ -412,35 +412,20 @@ def video_processing_thread(stereo_camera, bottle_detector, servo, robot):
         frame_left, frame_right = stereo_camera.capture_frame()
         if frame_left is None or frame_right is None:
             logger.warning("无法接收帧")
+            # time.sleep(0.1)
             continue
         
-        # 确保原始帧是彩色图像（BGR格式）
-        if len(frame_left.shape) == 3:
-            frame_left_color = frame_left.copy()
-            frame_right_color = frame_right.copy()
-        else:
-            # 如果是灰度图，转换为彩色图
-            frame_left_color = cv2.cvtColor(frame_left, cv2.COLOR_GRAY2BGR)
-            frame_right_color = cv2.cvtColor(frame_right, cv2.COLOR_GRAY2BGR)
+        # 校正左右相机图像
+        frame_left_rectified, img_left_rectified, img_right_rectified = stereo_camera.rectify_stereo_images(frame_left, frame_right)
         
-        # 校正左右相机图像，保持彩色
-        frame_left_rectified, img_left_rectified_gray, img_right_rectified_gray = stereo_camera.rectify_stereo_images(frame_left, frame_right)
-        
-        # 确保校正后的图像是彩色的
-        if len(frame_left_rectified.shape) == 2:
-            # 如果校正后是灰度图，转换为彩色图用于显示
-            frame_left_rectified_color = cv2.cvtColor(frame_left_rectified, cv2.COLOR_GRAY2BGR)
-        else:
-            frame_left_rectified_color = frame_left_rectified.copy()
-        
-        # 计算视差（使用灰度图进行计算）
-        disparity, disp_normalized = stereo_camera.compute_disparity(img_left_rectified_gray, img_right_rectified_gray)
+        # 计算视差
+        disparity, disp_normalized = stereo_camera.compute_disparity(img_left_rectified, img_right_rectified)
         
         # 计算三维坐标
         threeD = stereo_camera.compute_3d_points(disparity)
         
-        # 在彩色校正图上检测瓶子
-        bottle_detections = bottle_detector.detect(frame_left_rectified_color)
+        # 在左图上检测瓶子
+        bottle_detections = bottle_detector.detect(frame_left_rectified)
         
         # 处理检测结果，计算距离
         local_bottle_detections_with_distance = []
@@ -451,17 +436,16 @@ def video_processing_thread(stereo_camera, bottle_detector, servo, robot):
             
             if distance is not None:
                 logger.debug(f'瓶子检测: 坐标 [{left}, {top}, {right}, {bottom}], 分数: {score:.2f}, 距离: {distance:.2f}m')
-                # 在彩色图像上绘制瓶子和距离信息
-                bottle_detector.draw_detection(frame_left_rectified_color, (left, top, right, bottom, score), distance)
+                # 在图像上绘制瓶子和距离信息
+                bottle_detector.draw_detection(frame_left_rectified, (left, top, right, bottom, score), distance)
                 # 添加到带距离信息的瓶子检测结果
                 local_bottle_detections_with_distance.append((left, top, right, bottom, score, distance, cx, cy))
             else:
-                # 如果无法计算距离，仍然在彩色图像上绘制瓶子但不显示距离
-                bottle_detector.draw_detection(frame_left_rectified_color, (left, top, right, bottom, score))
+                # 如果无法计算距离，仍然绘制瓶子但不显示距离
+                bottle_detector.draw_detection(frame_left_rectified, (left, top, right, bottom, score))
         
         # 更新全局的瓶子检测结果
         bottle_detections_with_distance = local_bottle_detections_with_distance
-        
         # 检查是否检测到瓶子
         current_time = time.time()
         if local_bottle_detections_with_distance:
@@ -471,15 +455,13 @@ def video_processing_thread(stereo_camera, bottle_detector, servo, robot):
             # 找出距离最近的瓶子
             nearest_bottle = min(local_bottle_detections_with_distance, key=lambda x: x[5])
             _, _, _, _, _, distance, cx, _ = nearest_bottle
-            
             # 控制舵机跟踪最近的瓶子
             if servo.serial:
                 # 跟踪瓶子
                 current_servo_position = servo.track_object(
-                    frame_left_color.shape[1],  # 图像宽度，使用彩色图的尺寸
-                    frame_left_color.shape[0],  # 图像宽度，使用彩色图的尺寸
+                    frame_left.shape[1],  # 图像宽度
                     cx,
-                    cy,
+                    DEFAULT_SERVO_ID,
                     current_servo_position
                 )
                 # 更新最近瓶子的距离
@@ -493,7 +475,6 @@ def video_processing_thread(stereo_camera, bottle_detector, servo, robot):
                     servo.stop_servo(DEFAULT_SERVO_ID)
                     logger.info("未检测到瓶子，舵机已停止")
                 nearest_bottle_distance = None
-        
         # 自动模式下控制机器人
         if operation_mode == "auto" and auto_harvest_active and nearest_bottle_distance is not None:
             if nearest_bottle_distance > 1.0:  # 距离大于1米
@@ -517,41 +498,38 @@ def video_processing_thread(stereo_camera, bottle_detector, servo, robot):
             robot_moving = False
             logger.info("自动模式未激活，机器人停止")
         
-        # 在彩色图像上显示舵机位置信息
-        draw_servo_info(frame_left_rectified_color, current_servo_position)
+        # 在图像上显示舵机位置信息
+        draw_servo_info(frame_left_rectified, current_servo_position)
         
-        # 在彩色图像上显示模式信息
-        draw_mode_info(frame_left_rectified_color, operation_mode, auto_harvest_active)
+        # 在图像上显示模式信息
+        draw_mode_info(frame_left_rectified, operation_mode, auto_harvest_active)
         
         # 在自动模式下显示控制信息
         if operation_mode == "auto" and auto_harvest_active:
-            draw_auto_control_info(frame_left_rectified_color, nearest_bottle_distance, robot_moving)
+            draw_auto_control_info(frame_left_rectified, nearest_bottle_distance, robot_moving)
         
         # 计算并显示帧率
         frame_count += 1
         elapsed_time = time.time() - start_time
         fps = frame_count / elapsed_time
-        draw_fps(frame_left_rectified_color, fps)
+        draw_fps(frame_left_rectified, fps)
         
-        # 将处理后的彩色帧放入队列用于发送到服务器
+        # 将处理后的帧放入队列用于发送到服务器
         try:
             # 根据当前配置调整图像大小
-            resized_frame = cv2.resize(frame_left_rectified_color, current_config["resolution"])
+            resized_frame = cv2.resize(frame_left_rectified, current_config["resolution"])
             # 非阻塞方式，如果队列满了就丢弃帧
             if not frame_queue.full():
                 frame_queue.put_nowait(resized_frame)
         except Exception as e:
             logger.error(f"放入帧队列失败: {e}")
         
-        # 显示彩色结果
+        # 显示结果
         with video_lock:
-            cv2.imshow("Origin Left (Color)", frame_left_color)
-            cv2.imshow("Origin Right (Color)", frame_right_color)
-            cv2.imshow("Bottle Detection (Color)", frame_left_rectified_color)
-            
-            # 视差图转换为彩色显示（伪彩色）
-            disp_colormap = cv2.applyColorMap(disp_normalized, cv2.COLORMAP_JET)
-            cv2.imshow("Disparity Map (Color)", disp_colormap)
+            cv2.imshow("origin left", frame_left)
+            cv2.imshow("origin right", frame_right)
+            cv2.imshow("bottle detect", frame_left_rectified)
+            cv2.imshow("SVGM", disp_normalized)
         
         # 按Q退出
         if cv2.waitKey(1) & 0xFF == ord('q'):
@@ -814,7 +792,7 @@ def main():
         
         # 重置舵机位置并断开连接
         if 'servo' in locals() and servo.serial:
-            # servo.center_servo(DEFAULT_SERVO_ID)
+            servo.center_servo(DEFAULT_SERVO_ID)
             servo.disconnect()
         
         # 释放瓶子检测器资源
@@ -836,3 +814,4 @@ if __name__ == "__main__":
         main()
     except Exception as e:
         logger.error(f"程序异常退出: {e}")
+
