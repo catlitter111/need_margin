@@ -583,26 +583,26 @@ def video_processing_thread(stereo_camera, bottle_detector, servo, robot):
                 elif current_time - last_detection_time > 5.0:
                     # 超过5秒未检测到瓶子，开始随机搜索
                     # 每5秒改变一次搜索方向
-                    if int(current_time) % 5 == 0 and int(current_time) != int(last_search_time):
-                        last_search_time = current_time
-                        # 随机选择一个方向
-                        search_directions = [DIR_FORWARD, DIR_LEFT, DIR_RIGHT]
-                        random_dir = random.choice(search_directions)
+                    # if int(current_time) % 5 == 0 and int(current_time) != int(last_search_time):
+                    #     last_search_time = current_time
+                    #     # 随机选择一个方向
+                    #     search_directions = [DIR_FORWARD, DIR_LEFT, DIR_RIGHT]
+                    #     random_dir = random.choice(search_directions)
                         
-                        # 如果选择了向前，设置较高速度
-                        speed = robot_status["current_speed"] if random_dir == DIR_FORWARD else max(30, robot_status["current_speed"] - 20)
+                    #     # 如果选择了向前，设置较高速度
+                    #     speed = robot_status["current_speed"] if random_dir == DIR_FORWARD else max(30, robot_status["current_speed"] - 20)
                         
-                        # 移动指定方向2秒
-                        robot.move(random_dir, speed)
-                        robot_status["current_direction"] = random_dir
-                        robot_moving = True
-                        logger.info(f"自动模式: 搜索中，随机选择方向: {random_dir}")
+                    #     # 移动指定方向2秒
+                    #     robot.move(random_dir, speed)
+                    #     robot_status["current_direction"] = random_dir
+                    #     robot_moving = True
+                    #     logger.info(f"自动模式: 搜索中，随机选择方向: {random_dir}")
                         
-                        # 2秒后停止，等待新的检测结果
-                        time.sleep(2)
-                        robot.stop()
-                        robot_status["current_direction"] = DIR_STOP
-                        robot_moving = False
+                    #     # 2秒后停止，等待新的检测结果
+                    #     time.sleep(2)
+                    #     robot.stop()
+                    #     robot_status["current_direction"] = DIR_STOP
+                    #     robot_moving = False
 
         elif operation_mode == "auto" and not auto_harvest_active and robot_moving:
             # 如果自动采摘未激活但机器人在移动，停止机器人
