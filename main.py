@@ -581,6 +581,7 @@ def video_processing_thread(stereo_camera, bottle_detector, servo, robot):
                     robot_moving = False
                     logger.info("自动模式: 未检测到瓶子，机器人停止")
                 elif current_time - last_detection_time > 5.0:
+                    pass
                     # 超过5秒未检测到瓶子，开始随机搜索
                     # 每5秒改变一次搜索方向
                     # if int(current_time) % 5 == 0 and int(current_time) != int(last_search_time):
