@@ -467,7 +467,7 @@ def video_processing_thread(stereo_camera, bottle_detector, servo, robot):
         threeD = stereo_camera.compute_3d_points(disparity)
         
         # 在左图上检测瓶子
-        bottle_detections = bottle_detector.detect(frame_left_rectified)
+        bottle_detections = bottle_detector.detect(frame_left)
         
         # 处理检测结果，计算距离
         local_bottle_detections_with_distance = []
@@ -479,12 +479,12 @@ def video_processing_thread(stereo_camera, bottle_detector, servo, robot):
             if distance is not None:
                 logger.debug(f'瓶子检测: 坐标 [{left}, {top}, {right}, {bottom}], 分数: {score:.2f}, 距离: {distance:.2f}m')
                 # 在图像上绘制瓶子和距离信息
-                bottle_detector.draw_detection(frame_left_rectified, (left, top, right, bottom, score), distance)
+                bottle_detector.draw_detection(frame_left, (left, top, right, bottom, score), distance)
                 # 添加到带距离信息的瓶子检测结果
                 local_bottle_detections_with_distance.append((left, top, right, bottom, score, distance, cx, cy))
             else:
                 # 如果无法计算距离，仍然绘制瓶子但不显示距离
-                bottle_detector.draw_detection(frame_left_rectified, (left, top, right, bottom, score))
+                bottle_detector.draw_detection(frame_left, (left, top, right, bottom, score))
         
         # 更新全局的瓶子检测结果
         bottle_detections_with_distance = local_bottle_detections_with_distance
@@ -612,25 +612,25 @@ def video_processing_thread(stereo_camera, bottle_detector, servo, robot):
             logger.info("自动模式未激活，机器人停止")
         
         # 在图像上显示舵机位置信息
-        draw_servo_info(frame_left_rectified, current_servo_position)
+        draw_servo_info(frame_left, current_servo_position)
         
         # 在图像上显示模式信息
-        draw_mode_info(frame_left_rectified, operation_mode, auto_harvest_active)
+        draw_mode_info(frame_left, operation_mode, auto_harvest_active)
         
         # 在自动模式下显示控制信息
         if operation_mode == "auto" and auto_harvest_active:
-            draw_auto_control_info(frame_left_rectified, nearest_bottle_distance, robot_moving)
+            draw_auto_control_info(frame_left, nearest_bottle_distance, robot_moving)
         
         # 计算并显示帧率
         frame_count += 1
         elapsed_time = time.time() - start_time
         fps = frame_count / elapsed_time
-        draw_fps(frame_left_rectified, fps)
+        draw_fps(frame_left, fps)
         
         # 将处理后的帧放入队列用于发送到服务器
         try:
             # 根据当前配置调整图像大小
-            resized_frame = cv2.resize(frame_left_rectified, current_config["resolution"])
+            resized_frame = cv2.resize(frame_left, current_config["resolution"])
             # 非阻塞方式，如果队列满了就丢弃帧
             if not frame_queue.full():
                 frame_queue.put_nowait(resized_frame)
@@ -639,10 +639,10 @@ def video_processing_thread(stereo_camera, bottle_detector, servo, robot):
         
         # 显示结果
         with video_lock:
-            cv2.imshow("Origin Left", frame_left)
-            cv2.imshow("Origin Right", frame_right)
-            cv2.imshow("Bottle Detect", frame_left_rectified)
-            cv2.imshow("SVGM", disp_normalized)
+            # cv2.imshow("Origin Left", frame_left)
+            # cv2.imshow("Origin Right", frame_right)
+            cv2.imshow("Bottle Detect", frame_left)
+            # cv2.imshow("SVGM", disp_normalized)
         
         # 按Q退出
         if cv2.waitKey(1) & 0xFF == ord('q'):
@@ -978,4 +978,3 @@ if __name__ == "__main__":
         logger.error(f"程序异常退出: {e}")
 
 
-        
