@@ -498,6 +498,7 @@ def video_processing_thread(stereo_camera, bottle_detector, servo, robot):
             # 找出距离最近的瓶子
             nearest_bottle = min(local_bottle_detections_with_distance, key=lambda x: x[5])
             _, _, _, _, _, distance, cx, _ = nearest_bottle
+            nearest_bottle_distance = distance
             
             # 控制舵机跟踪最近的瓶子
             if servo.serial:
@@ -510,7 +511,6 @@ def video_processing_thread(stereo_camera, bottle_detector, servo, robot):
                 )
                 
                 # 更新最近瓶子的距离
-                nearest_bottle_distance = distance
         else:
             # 如果超过2秒未检测到瓶子，停止舵机
             if has_bottle and (current_time - last_detection_time) > 2.0:
@@ -527,7 +527,7 @@ def video_processing_thread(stereo_camera, bottle_detector, servo, robot):
             
             # 有检测到瓶子
             if nearest_bottle_distance is not None:
-                if nearest_bottle_distance > 1.0:  # 距离大于1米
+                if nearest_bottle_distance > 0.8:  # 距离大于1米
                     if not robot_moving:
                         # 控制机器人向前移动
                         robot.move(DIR_FORWARD, robot_status["current_speed"])
