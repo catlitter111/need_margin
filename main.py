@@ -103,6 +103,19 @@ frame_queue = Queue(maxsize=10)  # 帧缓冲队列
 operation_mode = "manual"  # 'manual'或'auto'
 auto_harvest_active = False  # 自动采摘是否激活
 
+# 机械臂抓取动作指令
+ARM_COMMANDS = {
+    "rt_start": "#000P1250T2000!#001P0900T2000!#002P2000T2000!#003P0800T2000!#004P2000T1500!#005P1200T2000!",
+    "rt_catch1": "#000P1250T2000!#001P0900T2000!#002P1750T2000!#003P1200T2000!#004P1500T2000!#005P1750T2000!",
+    "rt_catch2": "#000P2500T2000!#001P1400T2000!#002P1850T2000!#003P1700T2000!#004P1500T2000!#005P1750T2000!",
+    "rt_catch3": "#000P2500T1500!#001P1300T1500!#002P2000T1500!#003P1700T1500!#004P1500T1500!#005P1200T1500!",
+    "rt_catch4": "#000P1250T2000!#001P0900T2000!#002P2000T2000!#003P0800T2000!#004P1500T2000!#005P1200T2000!"
+}
+
+# 瓶子抓取标志
+is_grabbing = False
+last_grab_time = 0
+
 # 机器人状态
 robot_status = {
     "battery_level": 85,
@@ -130,6 +143,17 @@ nearest_bottle_distance = None  # 最近瓶子的距离
 # 搜索相关变量
 last_search_time = 0  # 上次搜索时间
 last_detection_time = 0  # 上次检测到瓶子的时间
+
+# 控制指令队列
+control_command_queue = Queue(maxsize=20)  # 控制命令队列
+control_status = {
+    "is_processing": False,  # 是否正在处理控制命令
+    "current_command": None,  # 当前正在处理的命令
+    "servo_position": CENTER_POSITION,  # 当前舵机位置
+    "robot_moving": False  # 机器人是否正在移动
+}
+# 舵机和电机控制线程标志
+control_thread_running = True
 
 # 线程锁
 video_lock = threading.Lock()
@@ -245,54 +269,69 @@ def handle_command(command_data):
         # 根据不同命令执行不同操作
         if cmd == "forward":
             robot_status["current_direction"] = DIR_FORWARD
-            robot_controller.move(DIR_FORWARD, speed)
+            # 向控制线程发送命令
+            control_command_queue.put({
+                "type": "move_robot",
+                "direction": DIR_FORWARD,
+                "speed": speed
+            })
             logger.info(f"机器人前进, 速度: {speed}%")
 
         elif cmd == "backward":
             robot_status["current_direction"] = DIR_BACKWARD
-            robot_controller.move(DIR_BACKWARD, speed)
+            control_command_queue.put({
+                "type": "move_robot",
+                "direction": DIR_BACKWARD,
+                "speed": speed
+            })
             logger.info(f"机器人后退, 速度: {speed}%")
 
         elif cmd == "left":
             robot_status["current_direction"] = DIR_LEFT
-            robot_controller.move(DIR_LEFT, speed)
+            control_command_queue.put({
+                "type": "move_robot",
+                "direction": DIR_LEFT,
+                "speed": speed
+            })
             logger.info(f"机器人左转, 速度: {speed}%")
 
         elif cmd == "right":
             robot_status["current_direction"] = DIR_RIGHT
-            robot_controller.move(DIR_RIGHT, speed)
+            control_command_queue.put({
+                "type": "move_robot",
+                "direction": DIR_RIGHT,
+                "speed": speed
+            })
             logger.info(f"机器人右转, 速度: {speed}%")
 
         elif cmd == "stop":
             robot_status["current_direction"] = DIR_STOP
-            robot_controller.stop()
+            control_command_queue.put({
+                "type": "move_robot",
+                "direction": DIR_STOP,
+                "speed": 0
+            })
             logger.info("机器人停止")
 
         elif cmd == "set_motor_speed":
             # 单独设置速度命令
-            robot_controller.set_speed(speed)
+            control_command_queue.put({
+                "type": "move_robot",
+                "direction": robot_status["current_direction"],
+                "speed": speed
+            })
             logger.info(f"设置电机速度: {speed}%")
 
-            # 如果当前有方向，更新该方向的速度
-            if robot_status["current_direction"] != DIR_STOP:
-                robot_controller.move(robot_status["current_direction"], speed)
-
         elif cmd == "startHarvest":
-            # 采摘功能可以添加其他命令
-            logger.info("开始采摘")
             # 模拟采摘增加
-            robot_status["harvested_count"] += 1
-            robot_status["today_harvested"] += 1
-            robot_status["total_harvested"] += 1
-            logger.info(f"采摘完成，当前总数: {robot_status['harvested_count']}")
+            control_command_queue.put({
+                "type": "grab_bottle",
+                "distance": 0.3  # 使用模拟距离
+            })
+            logger.info("开始采摘")
             
-            # 更新工作统计
-            robot_status["working_hours"] += 0.02  # 增加约1分钟
-            robot_status["working_area"] += 0.01  # 增加0.01公顷
+            # 更新工作统计在控制线程中完成
             
-            # 发送状态更新
-            send_status_update()
-
         elif cmd == "stopHarvest":
             # 暂停采摘
             logger.info("暂停采摘")
@@ -303,7 +342,11 @@ def handle_command(command_data):
     if cmd == "emergencyStop":
         # 紧急停止所有功能
         robot_status["current_direction"] = DIR_STOP
-        robot_controller.stop()
+        control_command_queue.put({
+            "type": "move_robot",
+            "direction": DIR_STOP,
+            "speed": 0
+        })
         logger.info("紧急停止所有操作")
         
         # 如果在自动模式，关闭自动采摘
@@ -435,18 +478,138 @@ def draw_auto_control_info(image, distance, robot_moving):
 
 
 # ====================线程函数====================
+def control_thread(servo_controller, robot_controller):
+    """舵机和电机控制线程：处理舵机和小车电机控制，减少视频处理线程负担"""
+    global control_status, control_thread_running, robot_status, is_grabbing, last_grab_time
+    
+    logger.info("舵机和电机控制线程已启动")
+    
+    while control_thread_running:
+        try:
+            # 尝试从队列获取控制命令
+            try:
+                command = control_command_queue.get(block=True, timeout=0.1)
+            except Empty:
+                # 队列为空，继续下一次循环
+                continue
+            
+            # 设置处理状态
+            control_status["is_processing"] = True
+            control_status["current_command"] = command
+            
+            # 解析命令
+            cmd_type = command.get("type")
+            
+            if cmd_type == "track_object":
+                # 跟踪物体命令
+                frame_width = command.get("frame_width")
+                cx = command.get("cx")
+                servo_id = command.get("servo_id", DEFAULT_SERVO_ID)
+                
+                # 更新舵机位置
+                if servo_controller.serial:
+                    new_pos = servo_controller.track_object(
+                        frame_width,  # 图像宽度
+                        cx,
+                        servo_id,
+                        control_status["servo_position"]
+                    )
+                    control_status["servo_position"] = new_pos
+            
+            elif cmd_type == "stop_servo":
+                # 停止舵机命令
+                servo_id = command.get("servo_id", DEFAULT_SERVO_ID)
+                if servo_controller.serial:
+                    servo_controller.stop_servo(servo_id)
+                    logger.info(f"舵机 {servo_id} 已停止")
+            
+            elif cmd_type == "move_robot":
+                # 移动机器人命令
+                direction = command.get("direction")
+                speed = command.get("speed", robot_status["current_speed"])
+                
+                # 移动机器人
+                robot_controller.move(direction, speed)
+                robot_status["current_direction"] = direction
+                control_status["robot_moving"] = (direction != DIR_STOP)
+                
+                # 记录日志
+                if direction == DIR_FORWARD:
+                    logger.info(f"机器人前进, 速度: {speed}%")
+                elif direction == DIR_BACKWARD:
+                    logger.info(f"机器人后退, 速度: {speed}%")
+                elif direction == DIR_LEFT:
+                    logger.info(f"机器人左转, 速度: {speed}%")
+                elif direction == DIR_RIGHT:
+                    logger.info(f"机器人右转, 速度: {speed}%")
+                elif direction == DIR_STOP:
+                    logger.info("机器人停止")
+            
+            elif cmd_type == "grab_bottle":
+                # 抓取瓶子命令
+                bottle_distance = command.get("distance")
+                is_grabbing = True
+                last_grab_time = time.time()
+                logger.info(f"开始抓取瓶子，距离: {bottle_distance:.2f}m")
+                
+                try:
+                    # 1. 初始姿态
+                    if servo_controller.serial:
+                        servo_controller.send_command(ARM_COMMANDS["rt_start"])
+                        logger.info("抓取动作: 初始姿态")
+                        
+                        # 2. 伸出机械臂
+                        servo_controller.send_command(ARM_COMMANDS["rt_catch1"])
+                        logger.info("抓取动作: 伸出机械臂")
+                        
+                        # 3. 抓取姿态
+                        servo_controller.send_command(ARM_COMMANDS["rt_catch2"])
+                        logger.info("抓取动作: 抓取姿态")
+                        
+                        # 4. 抬起瓶子
+                        servo_controller.send_command(ARM_COMMANDS["rt_catch3"])
+                        logger.info("抓取动作: 抬起瓶子")
+                        
+                        # 5. 回到初始位置
+                        servo_controller.send_command(ARM_COMMANDS["rt_catch4"])
+                        logger.info("抓取动作: 回到初始位置")
+                        
+                        # 更新采摘计数
+                        robot_status["harvested_count"] = robot_status.get("harvested_count", 0) + 1
+                        robot_status["today_harvested"] = robot_status.get("today_harvested", 0) + 1
+                        robot_status["total_harvested"] = robot_status.get("total_harvested", 0) + 1
+                        logger.info(f"自动模式: 完成一次采摘，当前总数: {robot_status['harvested_count']}")
+                        
+                        # 更新工作时间和面积
+                        robot_status["working_hours"] = robot_status.get("working_hours", 0) + 0.05
+                        robot_status["working_area"] = robot_status.get("working_area", 0) + 0.02
+                        
+                        # 发送状态更新
+                        send_status_update()
+                except Exception as e:
+                    logger.error(f"执行抓取动作出错: {e}")
+                finally:
+                    is_grabbing = False
+            
+            # 清除处理状态
+            control_status["is_processing"] = False
+            control_status["current_command"] = None
+            
+        except Exception as e:
+            logger.error(f"舵机和电机控制线程错误: {e}")
+            control_status["is_processing"] = False
+    
+    logger.info("舵机和电机控制线程已结束")
+
 def video_processing_thread(stereo_camera, bottle_detector, servo, robot):
-    """视频处理线程：执行瓶子检测、舵机控制和自动控制"""
+    """视频处理线程：执行瓶子检测和视频处理"""
     global bottle_detections_with_distance, robot_status, nearest_bottle_distance
-    global running, last_detection_time, last_search_time
+    global running, last_detection_time, last_search_time, is_grabbing, last_grab_time
+    global control_status
     
     # 初始化变量
-    current_servo_position = CENTER_POSITION
     start_time = time.time()
     frame_count = 0
-    robot_moving = False
-    last_detection_time = time.time()  # 上次检测到瓶子的时间
-    last_search_time = time.time()     # 上次搜索时间
     has_bottle = False                 # 标记是否检测到瓶子
     
     while running:
@@ -497,28 +660,25 @@ def video_processing_thread(stereo_camera, bottle_detector, servo, robot):
             
             # 找出距离最近的瓶子
             nearest_bottle = min(local_bottle_detections_with_distance, key=lambda x: x[5])
-            _, _, _, _, _, distance, cx, _ = nearest_bottle
+            _, _, _, _, _, distance, cx, cy = nearest_bottle
             nearest_bottle_distance = distance
             
-            # 控制舵机跟踪最近的瓶子
-            if servo.serial:
-                # 跟踪瓶子
-                current_servo_position = servo.track_object(
-                    frame_left.shape[1],  # 图像宽度
-                    cx,
-                    DEFAULT_SERVO_ID,
-                    current_servo_position
-                )
-                
-                # 更新最近瓶子的距离
+            # 向控制线程发送跟踪命令
+            control_command_queue.put({
+                "type": "track_object",
+                "frame_width": frame_left.shape[1],
+                "cx": cx,
+                "servo_id": DEFAULT_SERVO_ID
+            })
         else:
-            # 如果超过2秒未检测到瓶子，停止舵机
+            # 如果超过2秒未检测到瓶子，向控制线程发送停止舵机命令
             if has_bottle and (current_time - last_detection_time) > 2.0:
                 has_bottle = False
-                # 停止舵机
-                if servo.serial:
-                    servo.stop_servo(DEFAULT_SERVO_ID)
-                    logger.info("未检测到瓶子，舵机已停止")
+                control_command_queue.put({
+                    "type": "stop_servo",
+                    "servo_id": DEFAULT_SERVO_ID
+                })
+                logger.info("未检测到瓶子，发送停止舵机命令")
                 nearest_bottle_distance = None
         
         # 自动模式下控制机器人
@@ -527,16 +687,17 @@ def video_processing_thread(stereo_camera, bottle_detector, servo, robot):
             
             # 有检测到瓶子
             if nearest_bottle_distance is not None:
-                if nearest_bottle_distance > 0.8:  # 距离大于1米
-                    if not robot_moving:
-                        # 控制机器人向前移动
-                        robot.move(DIR_FORWARD, robot_status["current_speed"])
-                        robot_status["current_direction"] = DIR_FORWARD
-                        robot_moving = True
-                        logger.info(f"自动模式: 瓶子距离 {nearest_bottle_distance:.2f}m > 1.0m，机器人开始前进")
+                if nearest_bottle_distance > 0.8:  # 距离大于0.8米
+                    if not control_status["robot_moving"]:
+                        # 向控制线程发送向前移动命令
+                        control_command_queue.put({
+                            "type": "move_robot",
+                            "direction": DIR_FORWARD,
+                            "speed": robot_status["current_speed"]
+                        })
+                        logger.info(f"自动模式: 瓶子距离 {nearest_bottle_distance:.2f}m > 0.8m，发送前进命令")
                         
                         # 根据瓶子的位置适当调整方向
-                        # 找到最近的瓶子中心点
                         if bottle_detections_with_distance:
                             nearest_bottle = min(bottle_detections_with_distance, key=lambda x: x[5])
                             _, _, _, _, _, _, cx, _ = nearest_bottle
@@ -549,78 +710,82 @@ def video_processing_thread(stereo_camera, bottle_detector, servo, robot):
                             # 如果偏离中心过多，调整方向
                             if abs(offset) > frame_left.shape[1] // 6:  # 偏离超过1/6宽度
                                 if offset > 0:  # 瓶子在右侧
-                                    robot.move(DIR_RIGHT, max(30, robot_status["current_speed"] - 20))
-                                    logger.info("自动模式: 目标偏右，向右调整")
+                                    control_command_queue.put({
+                                        "type": "move_robot",
+                                        "direction": DIR_RIGHT,
+                                        "speed": max(30, robot_status["current_speed"] - 20)
+                                    })
+                                    logger.info("自动模式: 目标偏右，发送向右调整命令")
                                 else:  # 瓶子在左侧
-                                    robot.move(DIR_LEFT, max(30, robot_status["current_speed"] - 20))
-                                    logger.info("自动模式: 目标偏左，向左调整")
+                                    control_command_queue.put({
+                                        "type": "move_robot",
+                                        "direction": DIR_LEFT,
+                                        "speed": max(30, robot_status["current_speed"] - 20)
+                                    })
+                                    logger.info("自动模式: 目标偏左，发送向左调整命令")
                 else:
-                    if robot_moving:
-                        # 停止机器人
-                        robot.stop()
-                        robot_status["current_direction"] = DIR_STOP
-                        robot_moving = False
-                        logger.info(f"自动模式: 瓶子距离 {nearest_bottle_distance:.2f}m <= 1.0m，机器人停止，准备采摘")
+                    # 距离小于0.8米，停止机器人并准备抓取
+                    if control_status["robot_moving"]:
+                        # 向控制线程发送停止命令
+                        control_command_queue.put({
+                            "type": "move_robot",
+                            "direction": DIR_STOP,
+                            "speed": 0
+                        })
+                        logger.info(f"自动模式: 瓶子距离 {nearest_bottle_distance:.2f}m <= 0.8m，发送停止命令，准备采摘")
+                    
+                    # 检查瓶子是否在画面中心区域
+                    if bottle_detections_with_distance:
+                        nearest_bottle = min(bottle_detections_with_distance, key=lambda x: x[5])
+                        _, _, _, _, _, _, cx, cy = nearest_bottle
                         
-                        # 模拟采摘动作 - 这里应该增加实际的采摘动作代码
-                        if current_time - last_detection_time > 1.0:  # 避免重复触发
-                            # 更新采摘计数
-                            robot_status["harvested_count"] = robot_status.get("harvested_count", 0) + 1
-                            robot_status["today_harvested"] = robot_status.get("today_harvested", 0) + 1
-                            robot_status["total_harvested"] = robot_status.get("total_harvested", 0) + 1
-                            logger.info(f"自动模式: 完成一次采摘，当前总数: {robot_status['harvested_count']}")
-                            
-                            # 更新工作时间和面积
-                            robot_status["working_hours"] = robot_status.get("working_hours", 0) + 0.05  # 增加3分钟
-                            robot_status["working_area"] = robot_status.get("working_area", 0) + 0.02  # 增加0.02公顷
+                        # 定义中心区域
+                        image_center_x = frame_left.shape[1] // 2
+                        image_center_y = frame_left.shape[0] // 2
+                        center_tolerance = 50  # 中心区域容差像素值
+                        
+                        in_center = (abs(cx - image_center_x) <= center_tolerance and 
+                                    abs(cy - image_center_y) <= center_tolerance)
+                        
+                        # 如果瓶子在中心区域且距离足够近，且没有正在抓取，则执行抓取动作
+                        if in_center and nearest_bottle_distance < 0.5 and not is_grabbing and (current_time - last_grab_time) > 10.0:
+                            # 向控制线程发送抓取命令
+                            control_command_queue.put({
+                                "type": "grab_bottle",
+                                "distance": nearest_bottle_distance
+                            })
+                            logger.info(f"自动模式: 瓶子在中心区域，距离 {nearest_bottle_distance:.2f}m，发送抓取命令")
+                        elif not in_center and not is_grabbing:
+                            # 如果瓶子不在中心区域，提示信息
+                            logger.info(f"自动模式: 瓶子不在中心区域，无法抓取，偏移量X: {cx - image_center_x}, Y: {cy - image_center_y}")
             else:
                 # 没有检测到瓶子，但正在移动，应该停止并搜索
-                if robot_moving:
-                    robot.stop()
-                    robot_status["current_direction"] = DIR_STOP
-                    robot_moving = False
-                    logger.info("自动模式: 未检测到瓶子，机器人停止")
-                elif current_time - last_detection_time > 5.0:
-                    pass
-                    # 超过5秒未检测到瓶子，开始随机搜索
-                    # 每5秒改变一次搜索方向
-                    # if int(current_time) % 5 == 0 and int(current_time) != int(last_search_time):
-                    #     last_search_time = current_time
-                    #     # 随机选择一个方向
-                    #     search_directions = [DIR_FORWARD, DIR_LEFT, DIR_RIGHT]
-                    #     random_dir = random.choice(search_directions)
-                        
-                    #     # 如果选择了向前，设置较高速度
-                    #     speed = robot_status["current_speed"] if random_dir == DIR_FORWARD else max(30, robot_status["current_speed"] - 20)
-                        
-                    #     # 移动指定方向2秒
-                    #     robot.move(random_dir, speed)
-                    #     robot_status["current_direction"] = random_dir
-                    #     robot_moving = True
-                    #     logger.info(f"自动模式: 搜索中，随机选择方向: {random_dir}")
-                        
-                    #     # 2秒后停止，等待新的检测结果
-                    #     time.sleep(2)
-                    #     robot.stop()
-                    #     robot_status["current_direction"] = DIR_STOP
-                    #     robot_moving = False
+                if control_status["robot_moving"]:
+                    control_command_queue.put({
+                        "type": "move_robot",
+                        "direction": DIR_STOP,
+                        "speed": 0
+                    })
+                    logger.info("自动模式: 未检测到瓶子，发送停止命令")
 
-        elif operation_mode == "auto" and not auto_harvest_active and robot_moving:
+        elif operation_mode == "auto" and not auto_harvest_active and control_status["robot_moving"]:
             # 如果自动采摘未激活但机器人在移动，停止机器人
-            robot.stop()
-            robot_status["current_direction"] = DIR_STOP
-            robot_moving = False
-            logger.info("自动模式未激活，机器人停止")
+            control_command_queue.put({
+                "type": "move_robot",
+                "direction": DIR_STOP,
+                "speed": 0
+            })
+            logger.info("自动模式未激活，发送停止命令")
         
         # 在图像上显示舵机位置信息
-        draw_servo_info(frame_left, current_servo_position)
+        draw_servo_info(frame_left, control_status["servo_position"])
         
         # 在图像上显示模式信息
         draw_mode_info(frame_left, operation_mode, auto_harvest_active)
         
         # 在自动模式下显示控制信息
         if operation_mode == "auto" and auto_harvest_active:
-            draw_auto_control_info(frame_left, nearest_bottle_distance, robot_moving)
+            draw_auto_control_info(frame_left, nearest_bottle_distance, control_status["robot_moving"])
         
         # 计算并显示帧率
         frame_count += 1
@@ -866,7 +1031,7 @@ def battery_simulation_thread():
 
 # ====================主函数====================
 def main():
-    global running, robot_controller
+    global running, robot_controller, control_thread_running
     
     try:
         logger.info("启动瓶子检测与机器人控制集成程序...")
@@ -930,6 +1095,13 @@ def main():
         battery_thread.daemon = True
         battery_thread.start()
         
+        # 创建并启动舵机和电机控制线程
+        logger.info('--> 启动舵机和电机控制线程')
+        control_thread_running = True
+        control_thread_obj = threading.Thread(target=control_thread, args=(servo, robot_controller))
+        control_thread_obj.daemon = True
+        control_thread_obj.start()
+        
         # 设置初始位置 (北京天安门广场坐标)
         set_position(39.9042, 116.4074)
         
@@ -943,6 +1115,7 @@ def main():
         logger.error(f"主线程错误: {e}")
     finally:
         running = False
+        control_thread_running = False  # 停止控制线程
         
         # 关闭WebSocket连接
         if ws:
