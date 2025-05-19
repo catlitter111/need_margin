@@ -446,6 +446,14 @@ def video_processing_thread(stereo_camera, bottle_detector):
     has_bottle = False  # 标记是否检测到瓶子
     current_servo_position = CENTER_POSITION  # 当前舵机位置，用于显示
     
+    # 设置合理的距离范围限制
+    MIN_VALID_DISTANCE = 0.2  # 最小有效距离（米）
+    MAX_VALID_DISTANCE = 5.0  # 最大有效距离（米）
+    
+    # 用于距离平滑处理的变量
+    last_valid_distance = None
+    distance_history = []  # 存储最近几帧的距离值
+    
     while running:
         # 读取帧
         frame_left, frame_right = stereo_camera.capture_frame()
@@ -473,13 +481,20 @@ def video_processing_thread(stereo_camera, bottle_detector):
             # 获取瓶子中心点的3D坐标和距离
             distance = stereo_camera.get_bottle_distance(threeD, cx, cy)
             
-            if distance is not None:
+            # 有效距离检查
+            valid_distance = (distance is not None and 
+                             MIN_VALID_DISTANCE <= distance <= MAX_VALID_DISTANCE)
+            
+            if valid_distance:
                 logger.debug(f'瓶子检测: 坐标 [{left}, {top}, {right}, {bottom}], 分数: {score:.2f}, 距离: {distance:.2f}m')
                 # 在图像上绘制瓶子和距离信息
                 bottle_detector.draw_detection(frame_left, (left, top, right, bottom, score), distance)
                 # 添加到带距离信息的瓶子检测结果
                 local_bottle_detections_with_distance.append((left, top, right, bottom, score, distance, cx, cy))
             else:
+                # 如果距离无效，记录警告日志
+                if distance is not None:
+                    logger.warning(f'检测到无效距离值: {distance:.2f}m, 瓶子坐标 [{left}, {top}, {right}, {bottom}]')
                 # 如果无法计算距离，仍然绘制瓶子但不显示距离
                 bottle_detector.draw_detection(frame_left, (left, top, right, bottom, score))
         
@@ -492,10 +507,44 @@ def video_processing_thread(stereo_camera, bottle_detector):
             has_bottle = True
             last_detection_time = current_time
             
-            # 找出距离最近的瓶子
-            nearest_bottle = min(local_bottle_detections_with_distance, key=lambda x: x[5])
-            _, _, _, _, _, distance, cx, cy = nearest_bottle
+            # 找出距离最近的瓶子 - 增加稳定性处理
+            # 先按距离排序所有检测结果
+            sorted_detections = sorted(local_bottle_detections_with_distance, key=lambda x: x[5])
+            
+            # 取前3个最近的检测结果（如果有那么多）计算平均距离，增加稳定性
+            avg_count = min(3, len(sorted_detections))
+            if avg_count > 1:
+                avg_distance = sum(d[5] for d in sorted_detections[:avg_count]) / avg_count
+                # 选择最近的瓶子，但使用平均距离值来增加稳定性
+                nearest_bottle = sorted_detections[0]
+                _, _, _, _, _, _, cx, cy = nearest_bottle
+                distance = avg_distance
+            else:
+                # 只有一个检测结果时直接使用
+                nearest_bottle = sorted_detections[0]
+                _, _, _, _, _, distance, cx, cy = nearest_bottle
+            
+            # 应用低通滤波平滑距离变化
+            # 如果之前有有效距离且当前距离与之相差过大，进行平滑处理
+            if nearest_bottle_distance is not None:
+                # 允许的最大距离变化率（米/帧）
+                MAX_DISTANCE_CHANGE = 0.5
+                if abs(distance - nearest_bottle_distance) > MAX_DISTANCE_CHANGE:
+                    # 平滑处理：当前值占30%，之前值占70%
+                    logger.debug(f"距离变化过大, 应用平滑处理: 之前={nearest_bottle_distance:.2f}m, 当前={distance:.2f}m")
+                    distance = nearest_bottle_distance * 0.7 + distance * 0.3
+            
+            # 更新距离历史
+            distance_history.append(distance)
+            if len(distance_history) > 5:  # 保留最近5帧的数据
+                distance_history.pop(0)
+            
+            # 使用中位数滤波进一步提高稳定性
+            if len(distance_history) >= 3:
+                distance = sorted(distance_history)[len(distance_history)//2]
+            
             nearest_bottle_distance = distance
+            last_valid_distance = distance
             
             # 发送瓶子信息到控制线程
             control_queue.put({
@@ -512,6 +561,7 @@ def video_processing_thread(stereo_camera, bottle_detector):
             if has_bottle and (current_time - last_detection_time) > 2.0:
                 has_bottle = False
                 nearest_bottle_distance = None
+                distance_history = []  # 清空距离历史
                 
                 # 通知控制线程瓶子消失
                 control_queue.put({

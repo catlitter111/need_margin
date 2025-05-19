@@ -15,6 +15,10 @@ import math
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("stereo_camera")
 
+# 定义距离有效范围
+MIN_VALID_DISTANCE = 0.2  # 最小有效距离（米）
+MAX_VALID_DISTANCE = 5.0  # 最大有效距离（米）
+
 class StereoCamera:
     def __init__(self, camera_id=21, width=1280, height=480):
         """
@@ -222,14 +226,46 @@ class StereoCamera:
             return None
             
         x, y, z = point_3d
-        return math.sqrt(x**2 + y**2 + z**2) / 1000.0  # 毫米转米
+        
+        # 检查坐标值是否合理
+        if not np.isfinite(x) or not np.isfinite(y) or not np.isfinite(z):
+            logger.warning(f"检测到无效3D点坐标: x={x}, y={y}, z={z}")
+            return None
+            
+        # 计算距离（毫米转米）
+        distance = math.sqrt(x**2 + y**2 + z**2) / 1000.0
+        
+        # 距离有效性验证
+        if distance < MIN_VALID_DISTANCE or distance > MAX_VALID_DISTANCE:
+            logger.warning(f"检测到异常距离值: {distance}m（超出有效范围{MIN_VALID_DISTANCE}-{MAX_VALID_DISTANCE}m）")
+            return None
+            
+        return distance
         
     def get_bottle_distance(self, threeD, cx, cy):
         """获取瓶子中心点的距离"""
         try:
-            point_3d = threeD[cy][cx]
-            distance = self.calculate_distance(point_3d)
-            return distance
+            # 获取中心点及周围区域的平均距离，使距离计算更稳定
+            radius = 3  # 取中心点周围半径为3的区域
+            distances = []
+            
+            # 遍历中心点周围区域
+            for y in range(max(0, cy-radius), min(threeD.shape[0], cy+radius+1)):
+                for x in range(max(0, cx-radius), min(threeD.shape[1], cx+radius+1)):
+                    point_3d = threeD[y][x]
+                    distance = self.calculate_distance(point_3d)
+                    if distance is not None:
+                        distances.append(distance)
+            
+            # 如果收集到有效距离，计算中位数（比平均值更稳定）
+            if distances:
+                median_distance = sorted(distances)[len(distances)//2]
+                return median_distance
+            else:
+                return None
+                
         except Exception as e:
             logger.error(f"计算瓶子距离时出错: {e}")
             return None
+        
+        
