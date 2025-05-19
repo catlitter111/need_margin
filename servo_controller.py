@@ -237,7 +237,7 @@ class ServoController:
         #     return current_position
         # else:
             #print(cx - CENTERX)
-        print(offset_x)
+        # print(offset_x)
         if abs(object_cx - frame_center_x) <= dead_zone:
             if self.stop_flag_x == 1:
                 command1 = "#{:03d}PDST!".format(0)

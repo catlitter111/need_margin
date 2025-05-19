@@ -75,15 +75,15 @@ QUALITY_PRESETS = {
 INITIAL_PRESET = "medium"  # 初始质量预设
 
 # RKNN模型参数
-RKNN_MODEL = "/home/elf/Desktop/project/new_project/yolo11n.rknn"
+RKNN_MODEL = "/home/elf/Desktop/project_/need_margin/new_project/yolo11n.rknn"
 MODEL_SIZE = (640, 640)  # 模型输入尺寸
 
 # 舵机控制相关的常量
-DEFAULT_SERVO_PORT = "/dev/ttyS90"  # 默认舵机串口
+DEFAULT_SERVO_PORT = "/dev/ttyS9"  # 默认舵机串口
 DEFAULT_SERVO_BAUDRATE = 115200  # 默认波特率
 
 # 机器人控制串口
-ROBOT_SERIAL_PORT = "/dev/ttyS9"  # 机器人控制串口
+ROBOT_SERIAL_PORT = "/dev/ttyS3"  # 机器人控制串口
 ROBOT_SERIAL_BAUDRATE = 115200
 
 # 全局状态变量
@@ -504,9 +504,10 @@ def video_processing_thread(stereo_camera, bottle_detector, servo, robot):
             if servo.serial:
                 # 跟踪瓶子
                 current_servo_position = servo.track_object(
-                    frame_left.shape[1],  # 图像宽度
+                    frame_left.shape[1],  # 图像宽度，使用彩色图的尺寸
+                    frame_left.shape[0],  # 图像宽度，使用彩色图的尺寸
                     cx,
-                    DEFAULT_SERVO_ID,
+                    cy,
                     current_servo_position
                 )
                 
@@ -880,7 +881,7 @@ def main():
         
         # 加载相机参数
         logger.info('--> 加载相机参数')
-        stereo_camera.load_camera_params('/home/elf/Desktop/project/new_project/out.xls')
+        stereo_camera.load_camera_params('/home/elf/Desktop/project_/need_margin/new_project/out.xls')
         
         # 设置双目校正参数
         logger.info('--> 设置双目校正参数')
