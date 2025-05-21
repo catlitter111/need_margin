@@ -77,7 +77,7 @@ QUALITY_PRESETS = {
 INITIAL_PRESET = "medium"  # 初始质量预设
 
 # RKNN模型参数
-RKNN_MODEL = "/home/elf/Desktop/project_/need_margin/new_project/yolo11n.rknn"
+RKNN_MODEL = "/home/elf/Desktop/project/need_margin/data/yolo11n.rknn"
 MODEL_SIZE = (640, 640)  # 模型输入尺寸
 
 # 舵机控制相关的常量
@@ -863,7 +863,7 @@ def main():
         
         # 加载相机参数
         logger.info('--> 加载相机参数')
-        stereo_camera.load_camera_params('/home/elf/Desktop/project_/need_margin/new_project/out.xls')
+        stereo_camera.load_camera_params('/home/elf/Desktop/project/need_margin/data/out.xls')
         
         # 设置双目校正参数
         logger.info('--> 设置双目校正参数')
