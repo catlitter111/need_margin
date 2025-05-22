@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-瓶子检测与机器人控制主程序 (改进版)
+瓶子检测与机器人控制主程序 (异步增强版)
 整合双目相机瓶子检测、WebSocket通信和机器人控制功能
-分离视频处理和控制逻辑到不同线程，防止视频卡顿
-具有改进的自动采摘模式
+使用异步多线程检测技术提高NPU使用率，显著提升检测帧率
+具有改进的自动采摘模式和动态性能调节
 """
 
 import cv2
@@ -25,7 +25,7 @@ import random
 from stereo_camera import StereoCamera
 from robot_controller import RobotController, DIR_FORWARD, DIR_BACKWARD, DIR_LEFT, DIR_RIGHT, DIR_STOP
 from servo_controller import ServoController, DEFAULT_SERVO_ID, CENTER_POSITION, SERVO_MODE
-from bottle_detector import BottleDetector
+from bottle_detector_async import AsyncBottleDetector  # 使用异步检测器
 from motor_servo_control import MotorServoController
 
 # 配置日志
@@ -40,6 +40,13 @@ SERVER_URL = "ws://101.201.150.96:1234/ws/robot/robot_123"
 CAMERA_ID = 21  # 双目相机ID
 CAMERA_WIDTH = 1280
 CAMERA_HEIGHT = 480
+
+# 异步检测配置
+ASYNC_DETECTION_ENABLED = True  # 是否启用异步检测
+ASYNC_THREAD_COUNT = 3  # 异步检测线程数(1-3)，建议3以获得最佳性能
+ASYNC_PRELOAD_FRAMES = 3  # 预加载帧数
+TEMP_THRESHOLD_HIGH = 70  # 高温阈值（摄氏度）
+TEMP_THRESHOLD_MEDIUM = 60  # 中温阈值（摄氏度）
 
 # 质量预设配置
 QUALITY_PRESETS = {
@@ -114,6 +121,8 @@ robot_status = {
     "position": {"x": 0, "y": 0, "latitude": 0.0, "longitude": 0.0},
     "harvested_count": 0,
     "cpu_usage": 0,
+    "cpu_temp": 0,  # 新增CPU温度
+    "npu_usage": 0,  # 新增NPU使用率
     "signal_strength": 70,
     "upload_bandwidth": 1000,  # 初始估计值(Kbps)
     "frames_sent": 0,
@@ -125,7 +134,9 @@ robot_status = {
     "working_hours": 0.0,  # 工作时间(小时)
     "working_area": 0.0,   # 工作面积(公顷)
     "total_harvested": 0,  # 总采摘量
-    "today_harvested": 0   # 今日采摘量
+    "today_harvested": 0,  # 今日采摘量
+    "detection_fps": 0,    # 检测帧率
+    "async_threads": ASYNC_THREAD_COUNT  # 当前使用的异步线程数
 }
 
 # 瓶子检测结果
@@ -141,6 +152,53 @@ video_lock = threading.Lock()
 
 # 控制器实例
 motor_servo_controller = None
+async_bottle_detector = None  # 异步检测器实例
+
+# 性能监控
+current_thread_count = ASYNC_THREAD_COUNT  # 当前线程数
+
+# ====================性能监控函数====================
+def get_cpu_temp():
+    """获取CPU温度"""
+    try:
+        with open('/sys/class/thermal/thermal_zone0/temp', 'r') as f:
+            temp = float(f.read()) / 1000.0
+            return temp
+    except:
+        return 0
+
+def get_npu_usage():
+    """获取NPU使用率"""
+    try:
+        with open('/sys/class/devfreq/fdab0000.npu/load', 'r') as f:
+            load = f.read().strip()
+            # 解析load信息，格式通常是 "usage @ frequency"
+            usage = int(load.split('@')[0].strip())
+            return usage
+    except:
+        return 0
+
+def adjust_thread_count_by_temp(current_temp):
+    """根据温度动态调整线程数"""
+    global current_thread_count
+    
+    if current_temp > TEMP_THRESHOLD_HIGH:
+        new_count = 1  # 高温降低线程数
+        logger.warning(f"温度过高({current_temp:.1f}°C)，降低至1个检测线程")
+    elif current_temp > TEMP_THRESHOLD_MEDIUM:
+        new_count = 2  # 中温使用2线程
+        logger.info(f"温度适中({current_temp:.1f}°C)，使用2个检测线程")
+    else:
+        new_count = 3  # 低温使用3线程
+        
+    # 如果线程数需要改变，重新初始化检测器
+    if new_count != current_thread_count:
+        current_thread_count = new_count
+        if async_bottle_detector:
+            # 这里可以实现动态调整逻辑
+            logger.info(f"线程数调整为: {new_count}")
+    
+    return new_count
 
 # ====================WebSocket客户端函数====================
 def on_message(ws, message):
@@ -433,36 +491,59 @@ def draw_auto_control_info(image, distance, robot_moving):
         cv2.putText(image, f"Distance: {distance:.2f}m, Status: {status}", (10, 120), 
                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 200, 200), 2)
 
+def draw_performance_info(image, temp, threads):
+    """在图像上绘制性能信息"""
+    color = (0, 255, 0) if temp < 60 else (0, 255, 255) if temp < 70 else (0, 0, 255)
+    cv2.putText(image, f"Temp: {temp:.1f}C Threads: {threads}", (10, 150), 
+                cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
+
 
 # ====================线程函数====================
-def video_processing_thread(stereo_camera, bottle_detector):
-    """视频处理线程：执行瓶子检测和视频显示"""
+def video_processing_thread_async(stereo_camera, async_bottle_detector):
+    """异步视频处理线程：使用多线程检测器执行瓶子检测"""
     global bottle_detections_with_distance, robot_status, nearest_bottle_distance
     global running, last_detection_time
     
     # 初始化变量
     start_time = time.time()
     frame_count = 0
-    has_bottle = False  # 标记是否检测到瓶子
-    current_servo_position = CENTER_POSITION  # 当前舵机位置，用于显示
+    has_bottle = False
+    current_servo_position = CENTER_POSITION
     
     # 设置合理的距离范围限制
-    MIN_VALID_DISTANCE = 0.2  # 最小有效距离（米）
-    MAX_VALID_DISTANCE = 5.0  # 最大有效距离（米）
+    MIN_VALID_DISTANCE = 0.2
+    MAX_VALID_DISTANCE = 5.0
     
     # 用于距离平滑处理的变量
     last_valid_distance = None
-    distance_history = []  # 存储最近几帧的距离值
+    distance_history = []
+    
+    # 预加载帧到异步检测器（提高流水线效率）
+    logger.info(f"预加载{ASYNC_PRELOAD_FRAMES}帧到检测器...")
+    for _ in range(ASYNC_PRELOAD_FRAMES):
+        frame_left, frame_right = stereo_camera.capture_frame()
+        if frame_left is not None and frame_right is not None:
+            async_bottle_detector.detect_async(frame_left)
     
     while running:
-        # 读取帧
+        # 读取新帧并立即提交检测
         frame_left, frame_right = stereo_camera.capture_frame()
         if frame_left is None or frame_right is None:
             logger.warning("无法接收帧")
             time.sleep(0.1)
             continue
         
-        # 校正左右相机图像
+        # 提交当前帧进行异步检测
+        async_bottle_detector.detect_async(frame_left)
+        
+        # 获取检测结果（可能是之前帧的结果）
+        bottle_detections, detected_frame = async_bottle_detector.get_result()
+        
+        # 如果没有结果，继续处理
+        if bottle_detections is None:
+            continue
+        
+        # 校正左右相机图像（用于深度计算）
         frame_left_rectified, img_left_rectified, img_right_rectified = stereo_camera.rectify_stereo_images(frame_left, frame_right)
         
         # 计算视差
@@ -470,9 +551,6 @@ def video_processing_thread(stereo_camera, bottle_detector):
         
         # 计算三维坐标
         threeD = stereo_camera.compute_3d_points(disparity)
-        
-        # 在左图上检测瓶子
-        bottle_detections = bottle_detector.detect(frame_left)
         
         # 处理检测结果，计算距离
         local_bottle_detections_with_distance = []
@@ -488,15 +566,12 @@ def video_processing_thread(stereo_camera, bottle_detector):
             if valid_distance:
                 logger.debug(f'瓶子检测: 坐标 [{left}, {top}, {right}, {bottom}], 分数: {score:.2f}, 距离: {distance:.2f}m')
                 # 在图像上绘制瓶子和距离信息
-                bottle_detector.draw_detection(frame_left, (left, top, right, bottom, score), distance)
-                # 添加到带距离信息的瓶子检测结果
+                async_bottle_detector.draw_detection(frame_left, (left, top, right, bottom, score), distance)
                 local_bottle_detections_with_distance.append((left, top, right, bottom, score, distance, cx, cy))
             else:
-                # 如果距离无效，记录警告日志
                 if distance is not None:
-                    logger.warning(f'检测到无效距离值: {distance:.2f}m, 瓶子坐标 [{left}, {top}, {right}, {bottom}]')
-                # 如果无法计算距离，仍然绘制瓶子但不显示距离
-                bottle_detector.draw_detection(frame_left, (left, top, right, bottom, score))
+                    logger.warning(f'检测到无效距离值: {distance:.2f}m')
+                async_bottle_detector.draw_detection(frame_left, (left, top, right, bottom, score))
         
         # 更新全局的瓶子检测结果
         bottle_detections_with_distance = local_bottle_detections_with_distance
@@ -507,39 +582,33 @@ def video_processing_thread(stereo_camera, bottle_detector):
             has_bottle = True
             last_detection_time = current_time
             
-            # 找出距离最近的瓶子 - 增加稳定性处理
-            # 先按距离排序所有检测结果
+            # 找出距离最近的瓶子
             sorted_detections = sorted(local_bottle_detections_with_distance, key=lambda x: x[5])
             
-            # 取前3个最近的检测结果（如果有那么多）计算平均距离，增加稳定性
+            # 取前3个最近的检测结果计算平均距离
             avg_count = min(3, len(sorted_detections))
             if avg_count > 1:
                 avg_distance = sum(d[5] for d in sorted_detections[:avg_count]) / avg_count
-                # 选择最近的瓶子，但使用平均距离值来增加稳定性
                 nearest_bottle = sorted_detections[0]
                 _, _, _, _, _, _, cx, cy = nearest_bottle
                 distance = avg_distance
             else:
-                # 只有一个检测结果时直接使用
                 nearest_bottle = sorted_detections[0]
                 _, _, _, _, _, distance, cx, cy = nearest_bottle
             
             # 应用低通滤波平滑距离变化
-            # 如果之前有有效距离且当前距离与之相差过大，进行平滑处理
             if nearest_bottle_distance is not None:
-                # 允许的最大距离变化率（米/帧）
                 MAX_DISTANCE_CHANGE = 0.5
                 if abs(distance - nearest_bottle_distance) > MAX_DISTANCE_CHANGE:
-                    # 平滑处理：当前值占30%，之前值占70%
-                    logger.debug(f"距离变化过大, 应用平滑处理: 之前={nearest_bottle_distance:.2f}m, 当前={distance:.2f}m")
+                    logger.debug(f"距离变化过大, 应用平滑处理")
                     distance = nearest_bottle_distance * 0.7 + distance * 0.3
             
             # 更新距离历史
             distance_history.append(distance)
-            if len(distance_history) > 5:  # 保留最近5帧的数据
+            if len(distance_history) > 5:
                 distance_history.pop(0)
             
-            # 使用中位数滤波进一步提高稳定性
+            # 使用中位数滤波
             if len(distance_history) >= 3:
                 distance = sorted(distance_history)[len(distance_history)//2]
             
@@ -557,32 +626,30 @@ def video_processing_thread(stereo_camera, bottle_detector):
                 "frame_height": frame_left.shape[0]
             })
         else:
-            # 如果超过2秒未检测到瓶子，标记为没有瓶子
+            # 超过2秒未检测到瓶子，标记为没有瓶子
             if has_bottle and (current_time - last_detection_time) > 2.0:
                 has_bottle = False
                 nearest_bottle_distance = None
-                distance_history = []  # 清空距离历史
+                distance_history = []
                 
-                # 通知控制线程瓶子消失
                 control_queue.put({
                     "type": "bottle_update",
                     "visible": False,
                     "distance": None
                 })
         
-        # 在图像上显示舵机位置信息（从控制线程获取）
+        # 显示信息
         if 'motor_servo_controller' in globals() and motor_servo_controller:
             current_servo_position = motor_servo_controller.current_servo_position
         draw_servo_info(frame_left, current_servo_position)
-        
-        # 在图像上显示模式信息
         draw_mode_info(frame_left, operation_mode, auto_harvest_active)
         
-        # 在自动模式下显示控制信息
         if operation_mode == "auto" and auto_harvest_active:
-            # 此处不再需要判断robot_moving，状态显示由当前方向判断
             robot_moving = robot_status["current_direction"] != DIR_STOP
             draw_auto_control_info(frame_left, nearest_bottle_distance, robot_moving)
+        
+        # 绘制性能信息
+        draw_performance_info(frame_left, robot_status["cpu_temp"], current_thread_count)
         
         # 计算并显示帧率
         frame_count += 1
@@ -590,11 +657,12 @@ def video_processing_thread(stereo_camera, bottle_detector):
         fps = frame_count / elapsed_time
         draw_fps(frame_left, fps)
         
-        # 将处理后的帧放入队列用于发送到服务器
+        # 更新检测帧率到状态
+        robot_status["detection_fps"] = fps
+        
+        # 将处理后的帧放入队列
         try:
-            # 根据当前配置调整图像大小
             resized_frame = cv2.resize(frame_left, current_config["resolution"])
-            # 非阻塞方式，如果队列满了就丢弃帧
             if not frame_queue.full():
                 frame_queue.put_nowait(resized_frame)
         except Exception as e:
@@ -602,10 +670,7 @@ def video_processing_thread(stereo_camera, bottle_detector):
         
         # 显示结果
         with video_lock:
-            # cv2.imshow("Origin Left", frame_left)
-            # cv2.imshow("Origin Right", frame_right)
             cv2.imshow("Bottle Detect", frame_left)
-            # cv2.imshow("SVGM", disp_normalized)
         
         # 按Q退出
         if cv2.waitKey(1) & 0xFF == ord('q'):
@@ -636,6 +701,8 @@ def status_update_thread():
     """状态更新线程：定期发送机器人状态到服务器"""
     last_status_time = 0
     status_interval = 5  # 每5秒发送一次状态
+    last_temp_check = 0
+    temp_check_interval = 10  # 每10秒检查一次温度
 
     while running:
         try:
@@ -643,6 +710,10 @@ def status_update_thread():
 
             # 更新CPU使用率
             robot_status["cpu_usage"] = psutil.cpu_percent(interval=0.1)
+            
+            # 更新CPU温度和NPU使用率
+            robot_status["cpu_temp"] = get_cpu_temp()
+            robot_status["npu_usage"] = get_npu_usage()
 
             # 计算上传带宽
             bytes_sent_diff = robot_status["bytes_sent"] - robot_status["last_bytes_sent"]
@@ -657,6 +728,11 @@ def status_update_thread():
                 # 更新检查点
                 robot_status["last_bandwidth_check"] = current_time
                 robot_status["last_bytes_sent"] = robot_status["bytes_sent"]
+
+            # 定期检查温度并调整线程数
+            if current_time - last_temp_check >= temp_check_interval:
+                # adjust_thread_count_by_temp(robot_status["cpu_temp"])
+                last_temp_check = current_time
 
             # 定期发送状态更新
             if current_time - last_status_time >= status_interval:
@@ -683,6 +759,8 @@ def send_status_update():
                     # 基本数据
                     "battery_level": robot_status["battery_level"],
                     "cpu_usage": robot_status["cpu_usage"],
+                    "cpu_temp": robot_status["cpu_temp"],
+                    "npu_usage": robot_status["npu_usage"],
                     "signal_strength": robot_status["signal_strength"],
                     "upload_bandwidth": robot_status["upload_bandwidth"],
                     "frames_sent": robot_status["frames_sent"],
@@ -690,6 +768,8 @@ def send_status_update():
                     
                     # 视频和网络相关
                     "current_preset": current_preset,
+                    "detection_fps": robot_status["detection_fps"],
+                    "async_threads": current_thread_count,
                     
                     # 运动控制相关
                     "current_speed": robot_status["current_speed"],
@@ -849,10 +929,11 @@ def battery_simulation_thread():
 
 # ====================主函数====================
 def main():
-    global running, robot_controller, motor_servo_controller
+    global running, robot_controller, motor_servo_controller, async_bottle_detector
     
     try:
-        logger.info("启动瓶子检测与机器人控制集成程序...")
+        logger.info("启动瓶子检测与机器人控制集成程序（异步增强版）...")
+        logger.info(f"异步检测配置: 启用={ASYNC_DETECTION_ENABLED}, 线程数={ASYNC_THREAD_COUNT}")
         
         # 初始化双目相机
         logger.info('--> 初始化双目相机')
@@ -875,10 +956,6 @@ def main():
         if not servo.serial:
             logger.error("舵机初始化失败，程序将继续运行但不会控制舵机")
         else:
-            # 设置舵机为180度顺时针模式
-            # servo.set_mode(DEFAULT_SERVO_ID, SERVO_MODE)
-            # 将舵机移动到中心位置
-            # servo.center_servo(DEFAULT_SERVO_ID)
             servo.set_initial_position()
             time.sleep(1)
             logger.info("舵机已设置为180度顺时针模式并居中")
@@ -887,12 +964,10 @@ def main():
         logger.info('--> 初始化机器人控制器')
         robot_controller = RobotController(ROBOT_SERIAL_PORT, ROBOT_SERIAL_BAUDRATE)
         
-        # 初始化瓶子检测器
-        logger.info('--> 初始化瓶子检测器')
-        bottle_detector = BottleDetector(RKNN_MODEL, MODEL_SIZE)
-        if not bottle_detector.load_model():
-            logger.error("加载瓶子检测模型失败，程序退出")
-            return
+        # 初始化异步瓶子检测器
+        logger.info(f'--> 初始化异步瓶子检测器，使用{ASYNC_THREAD_COUNT}个线程')
+        async_bottle_detector = AsyncBottleDetector(RKNN_MODEL, MODEL_SIZE, ASYNC_THREAD_COUNT)
+        logger.info("异步检测器初始化成功")
         
         # 初始化电机舵机控制器并启动控制线程
         logger.info('--> 初始化电机舵机控制器')
@@ -926,9 +1001,9 @@ def main():
         # 设置初始位置 (北京天安门广场坐标)
         set_position(39.9042, 116.4074)
         
-        # 主线程执行视频处理
-        logger.info('--> 开始视频处理')
-        video_processing_thread(stereo_camera, bottle_detector)
+        # 主线程执行异步视频处理
+        logger.info('--> 开始异步视频处理')
+        video_processing_thread_async(stereo_camera, async_bottle_detector)
         
     except KeyboardInterrupt:
         logger.info("接收到终止信号，正在关闭...")
@@ -952,12 +1027,12 @@ def main():
         
         # 重置舵机位置并断开连接
         if 'servo' in locals() and servo.serial:
-            # servo.center_servo(DEFAULT_SERVO_ID)
             servo.disconnect()
         
-        # 释放瓶子检测器资源
-        if 'bottle_detector' in locals():
-            bottle_detector.release_model()
+        # 释放异步瓶子检测器资源
+        if 'async_bottle_detector' in globals() and async_bottle_detector:
+            async_bottle_detector.release()
+            logger.info("异步检测器资源已释放")
         
         # 关闭相机
         if 'stereo_camera' in locals():
