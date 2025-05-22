@@ -237,7 +237,7 @@ class StereoCamera:
         
         # 距离有效性验证
         if distance < MIN_VALID_DISTANCE or distance > MAX_VALID_DISTANCE:
-            logger.warning(f"检测到异常距离值: {distance}m（超出有效范围{MIN_VALID_DISTANCE}-{MAX_VALID_DISTANCE}m）")
+            # logger.warning(f"检测到异常距离值: {distance}m（超出有效范围{MIN_VALID_DISTANCE}-{MAX_VALID_DISTANCE}m）")
             return None
             
         return distance

@@ -23,10 +23,10 @@ DIR_RIGHT = 0x03
 DIR_STOP = 0x04
 
 # 距离阈值
-DISTANCE_FAR = 1.2  # 远距离阈值，超过此距离使用电机调整方向
-DISTANCE_NEAR = 0.8  # 近距离阈值，低于此距离使用舵机调整方向
-DISTANCE_HARVEST = 0.5  # 采摘距离阈值，低于此距离开始采摘
-DISTANCE_STOP = 0.3  # 停止距离，低于此距离停止移动
+DISTANCE_FAR = 0.6  # 远距离阈值，超过此距离使用电机调整方向
+DISTANCE_NEAR = 0.4  # 近距离阈值，低于此距离使用舵机调整方向
+DISTANCE_HARVEST = 0.44  # 采摘距离阈值，低于此距离开始采摘
+DISTANCE_STOP = 0.35  # 停止距离，低于此距离停止移动
 
 # 采摘状态
 HARVEST_IDLE = 0     # 空闲状态
@@ -42,11 +42,11 @@ CENTER_DEADZONE = 80  # 像素值，左右方向
 
 # 机械臂抓取动作指令
 ARM_COMMANDS = {
-    "rt_start": "#000P1250T2000!#001P0900T2000!#002P2000T2000!#003P0800T2000!#004P1500T1500!#005P1200T2000!",
-    "rt_catch1": "#000P1250T2000!#001P0900T2000!#002P1750T2000!#003P1200T2000!#004P1500T2000!#005P1850T2000!",
-    "rt_catch2": "#000P2500T2000!#001P1400T2000!#002P1850T2000!#003P1700T2000!#004P1500T2000!#005P1850T2000!",
-    "rt_catch3": "#000P2500T1500!#001P1300T1500!#002P2000T1500!#003P1700T1500!#004P1500T1500!#005P1200T1500!",
-    "rt_catch4": "#000P1250T2000!#001P0900T2000!#002P2000T2000!#003P0800T2000!#004P1500T2000!#005P1200T2000!"
+    "rt_start": "#000P1150T2000!#001P0900T2000!#002P2000T2000!#003P1000T2000!#005P1500T2000!",
+    "rt_catch1": "#000P1150T2000!#001P0900T2000!#002P1750T2000!#003P1000T2000!#005P1850T2000!",
+    "rt_catch2": "#000P2500T2000!#001P1400T2000!#002P1850T2000!#003P1700T2000!#005P1850T2000!",
+    "rt_catch3": "#000P2500T1500!#001P1300T1500!#002P2000T1500!#003P1700T1500!#005P1500T1500!",
+    "rt_catch4": "#000P1150T2000!#001P0900T2000!#002P2000T2000!#003P1000T2000!#005P1500T2000!"
 }
 
 class MotorServoController:
@@ -268,7 +268,7 @@ class MotorServoController:
                 if self.robot:
                     self.robot.stop()
                     self.current_direction = DIR_STOP
-                    logger.debug("未检测到瓶子，停止移动")
+                    logger.info("未检测到瓶子，停止移动")
             # 这里可以添加搜索逻辑，比如随机转向等
             return
         
@@ -310,17 +310,17 @@ class MotorServoController:
         if abs(offset_x) > CENTER_DEADZONE * 2:
             if offset_x > 0:  # 瓶子在左边
                 new_direction = DIR_LEFT
-                logger.debug("远距离：瓶子在左侧，向左转")
+                logger.info("远距离：瓶子在左侧，向左转")
             else:  # 瓶子在右边
                 new_direction = DIR_RIGHT
-                logger.debug("远距离：瓶子在右侧，向右转")
+                logger.info("远距离：瓶子在右侧，向右转")
                 
             # 仅当方向改变时才发送命令，减少频繁控制
             if self.current_direction != new_direction:
                 if self.robot:
                     # 使用较低的转向速度，避免突然快速转动
-                    turn_speed = max(30, min(self.current_speed - 20, 50))  # 限制最大转向速度为50%
-                    self.robot.move(new_direction, turn_speed)
+                    turn_speed = max(10, min(self.current_speed - 20, 10))  # 限制最大转向速度为30%
+                    self.robot.move(new_direction, 5)
                     self.current_direction = new_direction
                     logger.debug(f"转向速度设置为{turn_speed}%")
         else:
@@ -328,10 +328,10 @@ class MotorServoController:
             if self.current_direction != DIR_FORWARD:
                 if self.robot:
                     # 限制前进速度，防止远距离时速度过快
-                    approach_speed = min(self.current_speed, 60)  # 限制远距离接近速度最大为60%
+                    approach_speed = min(self.current_speed, 10)  # 限制远距离接近速度最大为60%
                     self.robot.move(DIR_FORWARD, approach_speed)
                     self.current_direction = DIR_FORWARD
-                    logger.debug(f"远距离：瓶子居中，前进，速度={approach_speed}%")
+                    logger.info(f"远距离：瓶子居中，前进，速度={approach_speed}%")
     
     def _control_approach_medium(self, offset_x):
         """中等距离接近控制"""
@@ -339,25 +339,26 @@ class MotorServoController:
         if abs(offset_x) > CENTER_DEADZONE:
             if offset_x > 0:  # 瓶子在左边
                 new_direction = DIR_LEFT
-                logger.debug("中等距离：瓶子在左侧，向左微调")
+                logger.info("中等距离：瓶子在左侧，向左微调")
             else:  # 瓶子在右边
                 new_direction = DIR_RIGHT
-                logger.debug("中等距离：瓶子在右侧，向右微调")
+                logger.info("中等距离：瓶子在右侧，向右微调")
                 
             # 使用更低的速度进行精确调整
             if self.current_direction != new_direction:
                 if self.robot:
-                    turn_speed = max(20, self.current_speed - 30)  # 更低的转向速度
+                    # turn_speed = max(20, self.current_speed - 30)  # 更低的转向速度
+                    turn_speed = 10
                     self.robot.move(new_direction, turn_speed)
                     self.current_direction = new_direction
         else:
             # 瓶子基本居中，缓慢前进
             if self.current_direction != DIR_FORWARD:
                 if self.robot:
-                    slow_speed = max(15, self.current_speed - 35)  # 缓慢靠近速度
+                    slow_speed = 10
                     self.robot.move(DIR_FORWARD, slow_speed)
                     self.current_direction = DIR_FORWARD
-                    logger.debug(f"中等距离：瓶子居中，缓慢前进，速度={slow_speed}%")
+                    logger.info(f"中等距离：瓶子居中，缓慢前进，速度={slow_speed}%")
     
     def _control_approach_near(self, offset_x):
         """近距离接近控制，主要使用舵机微调"""
@@ -366,7 +367,7 @@ class MotorServoController:
             if self.robot:
                 self.robot.stop()
                 self.current_direction = DIR_STOP
-                logger.debug("近距离：停止车辆，使用舵机微调")
+                logger.info("近距离：停止车辆，使用舵机微调")
         
         # 在自动模式下使用舵机进行微调 (手动模式下舵机控制由_manual_servo_control处理)
         if self.current_mode == "auto" and self.servo and self.servo.serial:

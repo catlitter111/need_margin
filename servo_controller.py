@@ -164,7 +164,7 @@ class ServoController:
     
     def set_initial_position(self):
         """设置所有舵机到初始位置"""
-        command = "#000P1250T1500!#001P0900T1500!#002P2000T1500!#003P0800T1500!#004P1500T1500!#005P1200T1500!"
+        command = "#000P1150T1500!#001P0900T1500!#002P2000T1500!#003P1000T1500!#005P1500T1500!"
         return self.send_command(command)
     
     def receive_catch(self, timeout=0.1):

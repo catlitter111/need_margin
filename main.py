@@ -876,9 +876,9 @@ def main():
             logger.error("舵机初始化失败，程序将继续运行但不会控制舵机")
         else:
             # 设置舵机为180度顺时针模式
-            servo.set_mode(DEFAULT_SERVO_ID, SERVO_MODE)
+            # servo.set_mode(DEFAULT_SERVO_ID, SERVO_MODE)
             # 将舵机移动到中心位置
-            servo.center_servo(DEFAULT_SERVO_ID)
+            # servo.center_servo(DEFAULT_SERVO_ID)
             servo.set_initial_position()
             time.sleep(1)
             logger.info("舵机已设置为180度顺时针模式并居中")
@@ -952,7 +952,7 @@ def main():
         
         # 重置舵机位置并断开连接
         if 'servo' in locals() and servo.serial:
-            servo.center_servo(DEFAULT_SERVO_ID)
+            # servo.center_servo(DEFAULT_SERVO_ID)
             servo.disconnect()
         
         # 释放瓶子检测器资源

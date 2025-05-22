@@ -2,20 +2,11 @@ import serial
 import time
 # 定义一个字典来存储所有的命令
 commands = {
-    "zl": "#000P0500T2000!",
-    "zl1":"#000P2500T2000!",
-    "read":"#000PRAD!",
-    "get_mod":"#000PMOD!",
-    "rt_start": "#000P1250T1500!#001P0900T1500!#002P2000T1500!#003P0900T1500!#004P1500T1500!#005P1200T1500!",
-    "rt_catch1": "#000P1500T1500!#001P0900T1500!#002P1750T1500!#003P1200T1500!#004P1500T1500!#005P1790T1500!",
-    "rt_catch2": "#000P2500T1500!#001P1400T1500!#002P1850T1500!#003P1700T1500!#004P1500T1500!#005P170T1500!",
-    "rt_catch3": "#000P2500T1500!#001P1300T1500!#002P2000T1500!#003P1700T1500!#004P1500T1500!#005P1200T1500!",
-    "rt_catch4": "#000P1500T1500!#001P0900T1500!#002P2000T1500!#003P0900T1500!#004P1500T1500!#005P1200T1500!",
-    "MIN":"#000P0800T3000!",
-    "MAX":"#000P1750T1500!",
-    "DPT":"#001PDPT!",
-    "DST":"#005PDST!",
-    "DCT":"#001PDCT!"
+
+    "a":"#000P0500T1500!",
+    "b":"#000P1500T1500!",
+    "c1":"#000PRAD!",
+
 
 
 }
@@ -102,13 +93,14 @@ def main():
             user_input = input("请输入指令 (s发送数据, q退出): ")
             if user_input.lower() == 'z':
                 # 发送测试数据
-                send(uart, commands["rt_start"])
+                send(uart, commands["a"])
                 #receive(uart)
             elif user_input.lower() == 'x':
-                send(uart, commands["rt_catch1"])
-                #receive(uart)
+                send(uart, commands["b"])
+                # receive(uart)
             elif user_input.lower() == 'c':
-                send(uart, commands["rt_catch2"])
+                send(uart, commands["c1"])
+                receive(uart)
             elif user_input.lower() == 'v':
                 send(uart, commands["rt_catch3"])
             elif user_input.lower() == 'b':
