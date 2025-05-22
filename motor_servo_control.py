@@ -24,9 +24,9 @@ DIR_STOP = 0x04
 
 # 距离阈值
 DISTANCE_FAR = 0.6  # 远距离阈值，超过此距离使用电机调整方向
-DISTANCE_NEAR = 0.4  # 近距离阈值，低于此距离使用舵机调整方向
-DISTANCE_HARVEST = 0.44  # 采摘距离阈值，低于此距离开始采摘
-DISTANCE_STOP = 0.35  # 停止距离，低于此距离停止移动
+DISTANCE_NEAR = 0.35  # 近距离阈值，低于此距离使用舵机调整方向
+DISTANCE_HARVEST = 0.36  # 采摘距离阈值，低于此距离开始采摘
+DISTANCE_STOP = 0.42  # 停止距离，低于此距离停止移动
 
 # 采摘状态
 HARVEST_IDLE = 0     # 空闲状态
@@ -35,7 +35,8 @@ HARVEST_STEP1 = 2    # 采摘步骤1
 HARVEST_STEP2 = 3    # 采摘步骤2
 HARVEST_STEP3 = 4    # 采摘步骤3
 HARVEST_STEP4 = 5    # 采摘步骤4
-HARVEST_COMPLETE = 6 # 采摘完成
+HARVEST_STEP5 = 6    # 采摘步骤5
+HARVEST_COMPLETE = 7 # 采摘完成
 
 # 图像中心区域的死区大小
 CENTER_DEADZONE = 80  # 像素值，左右方向
@@ -43,7 +44,8 @@ CENTER_DEADZONE = 80  # 像素值，左右方向
 # 机械臂抓取动作指令
 ARM_COMMANDS = {
     "rt_start": "#000P1150T2000!#001P0900T2000!#002P2000T2000!#003P1000T2000!#005P1500T2000!",
-    "rt_catch1": "#000P1150T2000!#001P0900T2000!#002P1750T2000!#003P1000T2000!#005P1850T2000!",
+    "rt_catch1": "#000P1150T2000!#001P0900T2000!#002P1650T2000!#003P1300T2000!#005P1500T2000!",
+    "rt_catch5": "#000P1150T2000!#001P0900T2000!#002P1650T2000!#003P1300T2000!#005P1850T2000!",
     "rt_catch2": "#000P2500T2000!#001P1400T2000!#002P1850T2000!#003P1700T2000!#005P1850T2000!",
     "rt_catch3": "#000P2500T1500!#001P1300T1500!#002P2000T1500!#003P1700T1500!#005P1500T1500!",
     "rt_catch4": "#000P1150T2000!#001P0900T2000!#002P2000T2000!#003P1000T2000!#005P1500T2000!"
@@ -319,8 +321,8 @@ class MotorServoController:
             if self.current_direction != new_direction:
                 if self.robot:
                     # 使用较低的转向速度，避免突然快速转动
-                    turn_speed = max(10, min(self.current_speed - 20, 10))  # 限制最大转向速度为30%
-                    self.robot.move(new_direction, 5)
+                    turn_speed = max(20, min(self.current_speed - 20, 20))  # 限制最大转向速度为30%
+                    self.robot.move(new_direction, 10)
                     self.current_direction = new_direction
                     logger.debug(f"转向速度设置为{turn_speed}%")
         else:
@@ -329,7 +331,7 @@ class MotorServoController:
                 if self.robot:
                     # 限制前进速度，防止远距离时速度过快
                     approach_speed = min(self.current_speed, 10)  # 限制远距离接近速度最大为60%
-                    self.robot.move(DIR_FORWARD, approach_speed)
+                    self.robot.move(DIR_FORWARD, 10)
                     self.current_direction = DIR_FORWARD
                     logger.info(f"远距离：瓶子居中，前进，速度={approach_speed}%")
     
@@ -348,8 +350,8 @@ class MotorServoController:
             if self.current_direction != new_direction:
                 if self.robot:
                     # turn_speed = max(20, self.current_speed - 30)  # 更低的转向速度
-                    turn_speed = 10
-                    self.robot.move(new_direction, turn_speed)
+                    turn_speed = 15
+                    self.robot.move(new_direction, 10)
                     self.current_direction = new_direction
         else:
             # 瓶子基本居中，缓慢前进
@@ -406,6 +408,8 @@ class MotorServoController:
                 
             self.harvest_state = HARVEST_STEP1
             self.harvest_step_time = current_time
+
+
             
         elif self.harvest_state == HARVEST_STEP1 and current_time - self.harvest_step_time > 2.0:
             # 第一步完成，发送第二步指令
@@ -415,26 +419,35 @@ class MotorServoController:
                 
             self.harvest_state = HARVEST_STEP2
             self.harvest_step_time = current_time
-            
+
         elif self.harvest_state == HARVEST_STEP2 and current_time - self.harvest_step_time > 2.0:
-            # 第二步完成，发送第三步指令
+            # 第一步完成，发送第二步指令
             if self.servo and self.servo.serial:
-                self.servo.send_command(ARM_COMMANDS["rt_catch2"])
-                logger.info("采摘步骤3: 抓取目标")
+                self.servo.send_command(ARM_COMMANDS["rt_catch5"])
+                logger.info("采摘步骤2: 准备抓取")
                 
             self.harvest_state = HARVEST_STEP3
             self.harvest_step_time = current_time
             
         elif self.harvest_state == HARVEST_STEP3 and current_time - self.harvest_step_time > 2.0:
-            # 第三步完成，发送第四步指令
+            # 第二步完成，发送第三步指令
             if self.servo and self.servo.serial:
-                self.servo.send_command(ARM_COMMANDS["rt_catch3"])
-                logger.info("采摘步骤4: 抬升目标")
+                self.servo.send_command(ARM_COMMANDS["rt_catch2"])
+                logger.info("采摘步骤3: 抓取目标")
                 
             self.harvest_state = HARVEST_STEP4
             self.harvest_step_time = current_time
             
         elif self.harvest_state == HARVEST_STEP4 and current_time - self.harvest_step_time > 2.0:
+            # 第三步完成，发送第四步指令
+            if self.servo and self.servo.serial:
+                self.servo.send_command(ARM_COMMANDS["rt_catch3"])
+                logger.info("采摘步骤4: 抬升目标")
+                
+            self.harvest_state = HARVEST_STEP5
+            self.harvest_step_time = current_time
+            
+        elif self.harvest_state == HARVEST_STEP5 and current_time - self.harvest_step_time > 2.0:
             # 第四步完成，发送第五步指令
             if self.servo and self.servo.serial:
                 self.servo.send_command(ARM_COMMANDS["rt_catch4"])
