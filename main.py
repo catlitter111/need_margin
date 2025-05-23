@@ -77,7 +77,7 @@ QUALITY_PRESETS = {
 INITIAL_PRESET = "medium"  # 初始质量预设
 
 # RKNN模型参数
-RKNN_MODEL = "/home/elf/Desktop/project/need_margin/data/yolo11n.rknn"
+RKNN_MODEL = "best2-20.rknn"
 MODEL_SIZE = (640, 640)  # 模型输入尺寸
 
 # 舵机控制相关的常量

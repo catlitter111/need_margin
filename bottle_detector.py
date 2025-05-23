@@ -12,23 +12,23 @@ from rknn.api import RKNN
 
 # 配置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-logger = logging.getLogger("bottle_detector")
+logger = logging.getLogger("orange_detector")
 
 # YOLO检测参数
 OBJ_THRESH = 0.2
 NMS_THRESH = 0.5
 
 # COCO类别
-CLASSES = ['person', 'bicycle', 'car', 'motorcycle', 'airplane', 'bus', 'train', 'truck', 'boat', 'traffic light',
-           'fire hydrant', 'stop sign', 'parking meter', 'bench', 'bird', 'cat', 'dog', 'horse', 'sheep', 'cow',
-           'elephant', 'bear', 'zebra', 'giraffe', 'backpack', 'umbrella', 'handbag', 'tie', 'suitcase', 'frisbee',
-           'skis', 'snowboard', 'sports ball', 'kite', 'baseball bat', 'baseball glove', 'skateboard', 'surfboard',
-           'tennis racket', 'bottle', 'wine glass', 'cup', 'fork', 'knife', 'spoon', 'bowl', 'banana', 'apple',
-           'sandwich', 'orange', 'broccoli', 'carrot', 'hot dog', 'pizza', 'donut', 'cake', 'chair', 'couch',
-           'potted plant', 'bed', 'dining table', 'toilet', 'tv', 'laptop', 'mouse', 'remote', 'keyboard', 'cell phone',
-           'microwave', 'oven', 'toaster', 'sink', 'refrigerator', 'book', 'clock', 'vase', 'scissors', 'teddy bear',
-           'hair drier', 'toothbrush']
-
+# CLASSES = ['person', 'bicycle', 'car', 'motorcycle', 'airplane', 'bus', 'train', 'truck', 'boat', 'traffic light',
+#            'fire hydrant', 'stop sign', 'parking meter', 'bench', 'bird', 'cat', 'dog', 'horse', 'sheep', 'cow',
+#            'elephant', 'bear', 'zebra', 'giraffe', 'backpack', 'umbrella', 'handbag', 'tie', 'suitcase', 'frisbee',
+#            'skis', 'snowboard', 'sports ball', 'kite', 'baseball bat', 'baseball glove', 'skateboard', 'surfboard',
+#            'tennis racket', 'bottle', 'wine glass', 'cup', 'fork', 'knife', 'spoon', 'bowl', 'banana', 'apple',
+#            'sandwich', 'orange', 'broccoli', 'carrot', 'hot dog', 'pizza', 'donut', 'cake', 'chair', 'couch',
+#            'potted plant', 'bed', 'dining table', 'toilet', 'tv', 'laptop', 'mouse', 'remote', 'keyboard', 'cell phone',
+#            'microwave', 'oven', 'toaster', 'sink', 'refrigerator', 'book', 'clock', 'vase', 'scissors', 'teddy bear',
+#            'hair drier', 'toothbrush']
+CLASSES = ['orange','bottle']
 # 颜色调色板
 color_palette = np.random.uniform(0, 255, size=(len(CLASSES), 3))
 
@@ -96,7 +96,7 @@ class BottleDetector:
             y_factor = img_h / self.model_size[1]
             
             for box, score, cl in zip(boxes, scores, classes):
-                if CLASSES[cl] == 'bottle':  # 只保留瓶子类别
+                if CLASSES[cl] == 'orange':  # 只保留瓶子类别
                     x1, y1, x2, y2 = [int(_b) for _b in box]
                     
                     left = int(x1 * x_factor)
@@ -122,7 +122,7 @@ class BottleDetector:
         distance -- 距离信息，如果有的话
         """
         left, top, right, bottom, score = detection[:5]
-        bottle_class_id = CLASSES.index('bottle')
+        bottle_class_id = CLASSES.index('orange')
         color = color_palette[bottle_class_id]
         
         # 绘制边界框
@@ -130,9 +130,9 @@ class BottleDetector:
         
         # 添加标签和距离信息
         if distance is not None:
-            label = f"bottle: {score:.2f}, distance: {distance:.2f}m"
+            label = f"orange: {score:.2f}, distance: {distance:.2f}m"
         else:
-            label = f"bottle: {score:.2f}"
+            label = f"orange: {score:.2f}"
             
         (label_width, label_height), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
         label_x = left
