@@ -35,20 +35,19 @@ HARVEST_STEP1 = 2    # 采摘步骤1
 HARVEST_STEP2 = 3    # 采摘步骤2
 HARVEST_STEP3 = 4    # 采摘步骤3
 HARVEST_STEP4 = 5    # 采摘步骤4
-HARVEST_STEP5 = 6    # 采摘步骤5
-HARVEST_COMPLETE = 7 # 采摘完成
+HARVEST_COMPLETE = 6 # 采摘完成
 
 # 图像中心区域的死区大小
 CENTER_DEADZONE = 80  # 像素值，左右方向
 
 # 机械臂抓取动作指令
 ARM_COMMANDS = {
-    "rt_start": "#000P1150T2000!#001P0900T2000!#002P2000T2000!#003P1000T2000!#005P1500T2000!",
-    "rt_catch1": "#000P1150T2000!#001P0900T2000!#002P1650T2000!#003P1300T2000!#005P1500T2000!",
-    "rt_catch5": "#000P1150T2000!#001P0900T2000!#002P1650T2000!#003P1300T2000!#005P1850T2000!",
-    "rt_catch2": "#000P2500T2000!#001P1400T2000!#002P1850T2000!#003P1700T2000!#005P1850T2000!",
-    "rt_catch3": "#000P2500T1500!#001P1300T1500!#002P2000T1500!#003P1700T1500!#005P1500T1500!",
-    "rt_catch4": "#000P1150T2000!#001P0900T2000!#002P2000T2000!#003P1000T2000!#005P1500T2000!"
+    #"rt_catch0": "#002P2000T2000!#003P1000T2000!#005P1500T2000!",
+    "rt_catch1": "#002P1650T2000!#003P1300T2000!#005P1700T2000!",
+    "rt_catch2": "#002P1650T2000!#003P1300T2000!#005P1950T2000!",
+    "rt_catch3": "#000P2200T2000!#001P1600T2000!#002P1850T2000!#003P2300T2000!#005P1950T2000!",
+    "rt_catch4": "#000P2200T2000!#001P1600T2000!#002P1850T2000!#003P2300T2000!#005P1700T0500!",
+    "rt_catch5": "#000P1380T1500!#001P0650T1500!#002P2150T1500!#003P0750T1500!#004P1970T1500!#005P1700T1500!"
 }
 
 class MotorServoController:
@@ -403,19 +402,18 @@ class MotorServoController:
         if self.harvest_state == HARVEST_STARTED:
             # 发送初始指令
             if self.servo and self.servo.serial:
-                self.servo.send_command(ARM_COMMANDS["rt_start"])
+                self.servo.send_command(ARM_COMMANDS["rt_catch1"])
                 logger.info("采摘步骤1: 机械臂就位")
                 
             self.harvest_state = HARVEST_STEP1
             self.harvest_step_time = current_time
 
-
             
         elif self.harvest_state == HARVEST_STEP1 and current_time - self.harvest_step_time > 2.0:
             # 第一步完成，发送第二步指令
             if self.servo and self.servo.serial:
-                self.servo.send_command(ARM_COMMANDS["rt_catch1"])
-                logger.info("采摘步骤2: 准备抓取")
+                self.servo.send_command(ARM_COMMANDS["rt_catch2"])
+                logger.info("采摘步骤2: 抓取")
                 
             self.harvest_state = HARVEST_STEP2
             self.harvest_step_time = current_time
@@ -423,8 +421,8 @@ class MotorServoController:
         elif self.harvest_state == HARVEST_STEP2 and current_time - self.harvest_step_time > 2.0:
             # 第一步完成，发送第二步指令
             if self.servo and self.servo.serial:
-                self.servo.send_command(ARM_COMMANDS["rt_catch5"])
-                logger.info("采摘步骤2: 准备抓取")
+                self.servo.send_command(ARM_COMMANDS["rt_catch3"])
+                logger.info("采摘步骤3: songhuimubiao")
                 
             self.harvest_state = HARVEST_STEP3
             self.harvest_step_time = current_time
@@ -432,8 +430,8 @@ class MotorServoController:
         elif self.harvest_state == HARVEST_STEP3 and current_time - self.harvest_step_time > 2.0:
             # 第二步完成，发送第三步指令
             if self.servo and self.servo.serial:
-                self.servo.send_command(ARM_COMMANDS["rt_catch2"])
-                logger.info("采摘步骤3: 抓取目标")
+                self.servo.send_command(ARM_COMMANDS["rt_catch4"])
+                logger.info("采摘步骤4: fangzhimubiao")
                 
             self.harvest_state = HARVEST_STEP4
             self.harvest_step_time = current_time
@@ -441,20 +439,20 @@ class MotorServoController:
         elif self.harvest_state == HARVEST_STEP4 and current_time - self.harvest_step_time > 2.0:
             # 第三步完成，发送第四步指令
             if self.servo and self.servo.serial:
-                self.servo.send_command(ARM_COMMANDS["rt_catch3"])
-                logger.info("采摘步骤4: 抬升目标")
-                
-            self.harvest_state = HARVEST_STEP5
-            self.harvest_step_time = current_time
-            
-        elif self.harvest_state == HARVEST_STEP5 and current_time - self.harvest_step_time > 2.0:
-            # 第四步完成，发送第五步指令
-            if self.servo and self.servo.serial:
-                self.servo.send_command(ARM_COMMANDS["rt_catch4"])
+                self.servo.send_command(ARM_COMMANDS["rt_catch5"])
                 logger.info("采摘步骤5: 返回初始位置")
                 
             self.harvest_state = HARVEST_COMPLETE
             self.harvest_step_time = current_time
+            
+        # elif self.harvest_state == HARVEST_STEP5 and current_time - self.harvest_step_time > 2.0:
+        #     # 第四步完成，发送第五步指令
+        #     if self.servo and self.servo.serial:
+        #         self.servo.send_command(ARM_COMMANDS["rt_catch5"])
+        #         logger.info("采摘步骤5: 返回初始位置")
+                
+        #     self.harvest_state = HARVEST_COMPLETE
+        #     self.harvest_step_time = current_time
             
             # 增加采摘计数
             self.harvested_count += 1

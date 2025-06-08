@@ -25,7 +25,53 @@ SERVO_MODE = 3  # 舵机模式：3表示180度顺时针
 
 # 线程锁
 servo_lock = threading.Lock()
-
+class PIDController:
+    """PID控制器类"""
+    
+    def __init__(self, kp=1.0, ki=0.0, kd=0.0, output_limit=None):
+        self.kp = kp
+        self.ki = ki
+        self.kd = kd
+        self.output_limit = output_limit
+        
+        self.last_error = 0.0
+        self.integral = 0.0
+        self.last_time = time.time()
+        
+    def update(self, error):
+        current_time = time.time()
+        dt = current_time - self.last_time
+        
+        if dt <= 0.0:
+            dt = 0.01
+            
+        # 比例项
+        proportional = self.kp * error
+        
+        # 积分项
+        self.integral += error * dt
+        integral_term = self.ki * self.integral
+        
+        # 微分项
+        derivative = (error - self.last_error) / dt
+        derivative_term = self.kd * derivative
+        
+        # PID输出
+        output = proportional + integral_term + derivative_term
+        
+        # 输出限制
+        if self.output_limit:
+            output = max(self.output_limit[0], min(self.output_limit[1], output))
+            
+        self.last_error = error
+        self.last_time = current_time
+        
+        return output
+    
+    def reset(self):
+        self.last_error = 0.0
+        self.integral = 0.0
+        self.last_time = time.time()
 class ServoController:
     """总线舵机控制器类"""
     
@@ -42,21 +88,52 @@ class ServoController:
         self.baudrate = baudrate
         self.timeout = timeout
         self.serial = None
+        # 舵机PWM范围设置
+        self.horizontal_servo_range = (500, 2500)  # 水平方向180度
+        self.vertical_servo_range = (500, 1500)    # 垂直方向90度
+        # 舵机中心位置
+        self.horizontal_servo_center = (self.horizontal_servo_range[0] + self.horizontal_servo_range[1]) // 2  # 1500
+        self.vertical_servo_center = 600     # 1000
+        # 像素到PWM的转换比例 (像素变化1.1，PWM变化1)
+        self.pixel_to_pwm_ratio = 1.0 / 1.1  # 约0.909
+        # 初始化PID控制器 - 调整输出限制范围
+        max_horizontal_change = (self.horizontal_servo_range[1] - self.horizontal_servo_range[0]) // 4  # 最大变化量
+        max_vertical_change = (self.vertical_servo_range[1] - self.vertical_servo_range[0]) // 4
+        self.horizontal_pid = PIDController(
+            kp=0.8, ki=0.02, kd=0.3, output_limit=(-max_horizontal_change, max_horizontal_change)
+        )
+        self.vertical_pid = PIDController(
+            kp=0.8, ki=0.02, kd=0.3, output_limit=(-max_vertical_change, max_vertical_change)
+        )
+        # 当前舵机位置
+        self.current_horizontal_pos = self.horizontal_servo_center
+        self.current_vertical_pos = self.vertical_servo_center
+        # 死区和平滑参数
+        self.dead_zone_x = 30
+        self.dead_zone_y = 30
+        self.smooth_factor = 0.85
+        # 运动阈值 - 调整为PWM单位
+        self.horizontal_movement_threshold = 5  # PWM单位
+        self.vertical_movement_threshold = 5    # PWM单位
+        # 系统状态
+        self.tracking_enabled = False
+        self.show_debug = True
+        # 初始化舵机
+        self._initialize_servos()
+
         self.connect()
 
-        self.stop_flag_x=1 
-        self.read_flag_x=1
-        self.send_left=1
-        self.send_right=1
-        self.PID_STARTX=0
 
-        self.stop_flag_y=1 
-        self.read_flag_y=1
-        self.send_up=1
-        self.send_down=1
-        self.PID_STARTY=0
 
-    
+    def _initialize_servos(self):
+        """初始化舵机到中心位置"""
+        # 设置舵机模式
+
+        # 移动到中心位置
+        command = f"#{0:03d}P{self.horizontal_servo_center:04d}T{1000:04d}!#{1:03d}P{self.vertical_servo_center:04d}T{1000:04d}!"
+        self.send_command(command)
+        time.sleep(1.5)
+        print(f"舵机初始化完成 - 水平:{self.horizontal_servo_center}, 垂直:{self.vertical_servo_center}")   
     def connect(self):
         """连接到舵机"""
         try:
@@ -164,7 +241,7 @@ class ServoController:
     
     def set_initial_position(self):
         """设置所有舵机到初始位置"""
-        command = "#000P1150T1500!#001P0900T1500!#002P2000T1500!#003P1000T1500!#005P1500T1500!"
+        command = "#000P1380T1500!#001P0650T1500!#002P2150T1500!#003P0750T1500!#004P1970T1500!#005P1670T1500!"
         return self.send_command(command)
     
     def receive_catch(self, timeout=0.1):
@@ -211,7 +288,7 @@ class ServoController:
             logger.error(f"接收失败: {e}")
             return None
         
-    def track_object(self, frame_width,fram_hight, object_cx, object_cy, current_position=CENTER_POSITION):
+    def track_object(self, frame_width,frame_height, center_x, center_y, current_position=CENTER_POSITION):
         """
         跟踪物体，控制舵机使其保持在画面中心
         
@@ -224,136 +301,88 @@ class ServoController:
         返回:
         新的舵机位置
         """
-        # 计算画面中心与物体中心的水平偏差
-        frame_center_x = frame_width // 2+80
-        offset_x = frame_center_x - object_cx
-        SPEED = 7.5
-        # 设置死区范围，避免微小偏差引起的频繁调整
-        dead_zone = 30  # 较大的死区，减少频繁移动
-        
-        # 只有偏差超过死区才进行调整
-        # if abs(offset_x) <= dead_zone:
-        #     logger.debug(f"物体在中心区域内，偏差={offset_x}px,无需调整")
-        #     return current_position
-        # else:
-            #print(cx - CENTERX)
-        # print(offset_x)
-        if abs(object_cx - frame_center_x) <= dead_zone:
-            if self.stop_flag_x == 1:
-                command1 = "#{:03d}PDST!".format(0)
-                self.send_command(command1)
-                self.stop_flag_x = 0
-                self.read_flag_x = 1
-                self.send_left=1
-                self.send_right=1
-        else:
-            self.stop_flag_x = 1
-            if self.read_flag_x == 1:
-                command1 = "#{:03d}PRAD!".format(0)
-                self.send_command(command1)
-                self.PID_STARTX=self.receive_catch()
-                self.read_flag_x=0
-            else:
-                #print(PID_STARTX)
+        if center_x is not None and center_y is not None:
+            
+            # 计算图像中心
+            frame_center_x = frame_width // 2 + 80
+            frame_center_y = frame_height // 2
+            
+            # 计算像素误差
+            pixel_error_x = center_x - frame_center_x
+            pixel_error_y = center_y - frame_center_y
+            
+            # 将像素误差转换为PWM误差（总是计算，用于调试显示）
+            pwm_error_x = pixel_error_x * self.pixel_to_pwm_ratio
+            pwm_error_y = pixel_error_y * self.pixel_to_pwm_ratio
+            
+            # 死区检测
+            if abs(pixel_error_x) < self.dead_zone_x:
+                pixel_error_x = 0
+                pwm_error_x = 0
+            if abs(pixel_error_y) < self.dead_zone_y:
+                pixel_error_y = 0
+                pwm_error_y = 0
+            
+            # PID控制 - 应用像素到PWM的转换比例
+            if pixel_error_x != 0 or pixel_error_y != 0:
+                horizontal_output = self.horizontal_pid.update(pwm_error_x)
+                vertical_output = self.vertical_pid.update(pwm_error_y)  # 垂直方向反向
                 
-                if frame_center_x - object_cx > dead_zone:
+                # 水平舵机控制
+                if abs(horizontal_output) > self.horizontal_movement_threshold:
+                    new_h_pos = self.current_horizontal_pos - horizontal_output
                     
-                    if self.PID_STARTX > 2100:
-                        command1 = "#{:03d}PDST!".format(0)
-                    else:
-                        temp=int((2167-self.PID_STARTX)*SPEED)
-                        if temp<4000:
-                            temp=4000
-                        command1 = "#{:03d}P{:04d}T{:04d}!".format(0, 2167, temp)
-                    if self.send_left==1:
-                        self.send_command(command1)
-                        self.send_left=0
-                        self.send_right=1
-                elif object_cx - frame_center_x > dead_zone:
+                    # 平滑滤波
+                    new_h_pos = (self.smooth_factor * self.current_horizontal_pos + 
+                                (1 - self.smooth_factor) * new_h_pos)
                     
-                    if self.PID_STARTX < 833:
-                        command1 = "#{:03d}PDST!".format(0)
-                    else:
-                        temp=int((self.PID_STARTX-833)*SPEED)
-                        if temp<3000:
-                            temp=3000
-                        command1 = "#{:03d}P{:04d}T{:04d}!".format(0, 833, temp)
-                    if self.send_right==1:
-                        self.send_command(command1)
-                        self.send_right=0
-                        self.send_left=1   
-        frame_center_y = fram_hight // 2
-        offset_y = frame_center_y - object_cy
-        #print(cy - CENTERY)
-        if abs(object_cy - frame_center_y) <= dead_zone:
-            if self.stop_flag_y == 1:
-                command1 = "#{:03d}PDST!".format(1)
-                self.send_command(command1)
-                self.stop_flag_y = 0
-                self.read_flag_y = 1
-                self.send_up=1
-                self.send_down=1
+                    # 限制在水平舵机范围内
+                    new_h_pos = max(self.horizontal_servo_range[0], 
+                                   min(self.horizontal_servo_range[1], int(new_h_pos)))
+                    # 只有当位置变化足够大时才发送命令
+                    if abs(new_h_pos - self.current_horizontal_pos) > 3:
+                        try:
+                            self.current_horizontal_pos = new_h_pos
+                        except Exception as e:
+                            print(f"水平舵机控制错误: {e}")
+                
+                # 垂直舵机控制
+                if abs(vertical_output) > self.vertical_movement_threshold:
+                    new_v_pos = self.current_vertical_pos - vertical_output
+                    
+                    
+                    # 平滑滤波
+                    new_v_pos = (self.smooth_factor * self.current_vertical_pos + 
+                                (1 - self.smooth_factor) * new_v_pos)
+                    
+                    # 限制在垂直舵机范围内
+                    new_v_pos = max(self.vertical_servo_range[0], 
+                                   min(self.vertical_servo_range[1], int(new_v_pos)))
+                    # print(new_v_pos)
+                    # 只有当位置变化足够大时才发送命令
+                    if abs(new_v_pos - self.current_vertical_pos) > 3:
+                        try:
+                            self.current_vertical_pos = new_v_pos
+                        except Exception as e:
+                            print(f"舵机控制错误: {e}")
+                if  abs(horizontal_output) > self.horizontal_movement_threshold and abs(vertical_output) > self.vertical_movement_threshold:
+                    command = f"#{0:03d}P{new_h_pos:04d}T{abs(new_h_pos - self.current_horizontal_pos):04d}!#{1:03d}P{new_v_pos:04d}T{abs(new_v_pos - self.current_vertical_pos):04d}!"
+                    self.send_command(command)    
+                else:
+                    if abs(vertical_output) > self.vertical_movement_threshold:
+                        command = f"#{1:03d}P{new_v_pos:04d}T{abs(new_v_pos - self.current_vertical_pos):04d}!"
+                        self.send_command(command)
+                    elif abs(horizontal_output) > self.horizontal_movement_threshold:
+                        command = f"#{0:03d}P{new_h_pos:04d}T{abs(new_h_pos - self.current_horizontal_pos):04d}!"
+                        self.send_command(command)
         else:
-            self.stop_flag_y = 1
-            if self.read_flag_y == 1:
-                command1 = "#{:03d}PRAD!".format(1)
-                self.send_command(command1)
-                self.PID_STARTY=self.receive_catch()
-                self.read_flag_y=0
-            else:
-                if frame_center_y - object_cy > dead_zone:  
-                    if self.PID_STARTY > 1480:
-                        command1 = "#{:03d}PDST!".format(1)
-                    else:
-                        temp=int((1500 - self.PID_STARTY)*SPEED)
-                        if temp<4000:
-                            temp=4000
-                        command1 = "#{:03d}P{:04d}T{:04d}!".format(1, 1500, temp)
-                    if self.send_up==1:
-                        self.send_command(command1)
-                        self.send_up=0
-                        self.send_down=1
-                elif object_cy - frame_center_y > dead_zone:
-                    
-                    if self.PID_STARTY < 882:
-                        command1 = "#{:03d}PDST!".format(1)
-                    else:
-                        temp=int((self.PID_STARTY - 882)*SPEED)
-                        if temp <3000:
-                            temp=3000
-                        command1 = "#{:03d}P{:04d}T{:04d}!".format(1, 882,temp)
-                    if self.send_down==1:
-                        self.send_command(command1)
-                        self.send_down=0
-                        self.send_up=1
-        # # 根据偏差计算舵机新位置
-        # # 使用非线性映射，大偏差时移动更快，小偏差时移动更缓慢
-        # # 偏移系数根据偏差大小动态调整
-        # offset_coefficient = 1  # 基础系数
-        # # if abs(offset_x) > 100:
-        # #     offset_coefficient = 1.5  # 偏差较大时，加大调整幅度
-        # # elif abs(offset_x) <= 30:
-        # #     offset_coefficient = 0.5  # 偏差小时，减小调整幅度
-        
-        # # 计算新位置，加入平滑处理
-        position_delta = int(offset_x * 10)
-        # # 限制单次调整的最大幅度
-        position_delta = max(-30, min(30, position_delta))
-        
-        new_position = current_position + position_delta
-        
-        # # 限制在有效范围内 (500-2500)
-        # new_position = max(MIN_POSITION, min(MAX_POSITION, new_position))
-        
-        # # 只有当位置变化超过阈值时才调整，避免频繁小幅度调整
-        # with servo_lock:
-        #     if abs(new_position - current_position) > dead_zone:
-        #         # 控制舵机，增加移动时间使移动更平滑
-        #         time_ms = 5000  # 增加移动时间，使运动更平滑
-        #         self.move_servo(servo_id, new_position, time_ms)
-        #         logger.info(f"跟踪物体：位置偏差={offset_x}px, 舵机位置从{current_position}调整到{new_position}，时间={time_ms}ms")
-        
-        return new_position
+            # 没有检测到色块时，初始化误差变量为0（用于调试显示）
+            pixel_error_x = pixel_error_y = 0
+            pwm_error_x = pwm_error_y = 0
+  
+
+        return 1
+
 
 
     def stop_servo(self, servo_id=DEFAULT_SERVO_ID):
