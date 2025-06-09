@@ -25,7 +25,7 @@ DIR_STOP = 0x04
 # 距离阈值
 DISTANCE_FAR = 0.6  # 远距离阈值，超过此距离使用电机调整方向
 DISTANCE_NEAR = 0.35  # 近距离阈值，低于此距离使用舵机调整方向
-DISTANCE_HARVEST = 0.36  # 采摘距离阈值，低于此距离开始采摘
+DISTANCE_HARVEST = 0.6  # 采摘距离阈值，低于此距离开始采摘
 DISTANCE_STOP = 0.42  # 停止距离，低于此距离停止移动
 
 # 采摘状态
@@ -38,7 +38,7 @@ HARVEST_STEP4 = 5    # 采摘步骤4
 HARVEST_COMPLETE = 6 # 采摘完成
 
 # 图像中心区域的死区大小
-CENTER_DEADZONE = 80  # 像素值，左右方向
+CENTER_DEADZONE = 200  # 像素值，左右方向
 
 # 机械臂抓取动作指令
 ARM_COMMANDS = {
